@@ -371,6 +371,9 @@ struct qpnp_hap {
 	u32 timeout_ms;
 	u32 time_required_to_generate_back_emf_us;
 	u32 vmax_mv;
+	u32 vtg_min;
+	u32 vtg_max;
+	u32 vtg_default;
 	u32 ilim_ma;
 	u32 sc_deb_cycles;
 	u32 int_pwm_freq_khz;
@@ -799,10 +802,10 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 	u8 reg = 0;
 	int rc, temp;
 
-	if (hap->vmax_mv < QPNP_HAP_VMAX_MIN_MV)
-		hap->vmax_mv = QPNP_HAP_VMAX_MIN_MV;
-	else if (hap->vmax_mv > QPNP_HAP_VMAX_MAX_MV)
-		hap->vmax_mv = QPNP_HAP_VMAX_MAX_MV;
+	if (hap->vmax_mv < hap->vtg_min)
+		hap->vmax_mv = hap->vtg_min;
+	else if (hap->vmax_mv > hap->vtg_max)
+		hap->vmax_mv = hap->vtg_max;
 
 	rc = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
 	if (rc < 0)
@@ -1474,6 +1477,16 @@ static ssize_t vmax_store(struct device *dev,
 	if (sscanf(buf, "%d", &data) != 1)
 		return -EINVAL;
 
+	if (data < hap->vtg_min) {
+		pr_err("%s: mv %d not in range (%d - %d), using min.", __func__, data,
+				hap->vtg_min, hap->vtg_max);
+		data = hap->vtg_min;
+	} else if (data > hap->vtg_max) {
+		pr_err("%s: mv %d not in range (%d - %d), using max.", __func__, data,
+				hap->vtg_min, hap->vtg_max);
+		data = hap->vtg_max;
+	}
+
 	hap->vmax_mv = data;
 
 	rc = qpnp_hap_vmax_config(hap);
@@ -1539,6 +1552,38 @@ static ssize_t wave_store(struct device *dev,
         return count;
 }
 
+static ssize_t qpnp_hap_min_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_min);
+}
+
+static ssize_t qpnp_hap_max_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_max);
+}
+
+static ssize_t qpnp_hap_default_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_default);
+}
 
 /* sysfs attributes */
 static struct device_attribute qpnp_hap_attrs[] = {
@@ -1593,9 +1638,18 @@ static struct device_attribute qpnp_hap_attrs[] = {
         __ATTR(vmax_level, (S_IRUGO | S_IWUSR | S_IWGRP),
                         NULL,
                         vmax_level_store),
-	__ATTR(vmax, (S_IRUGO | S_IWUSR | S_IWGRP),
+	__ATTR(vtg_level, (S_IRUGO | S_IWUSR | S_IWGRP),
 			vmax_show,
-			vmax_store)
+			vmax_store),
+	__ATTR(vtg_min, S_IRUGO,
+			qpnp_hap_min_show,
+			NULL),
+	__ATTR(vtg_max, S_IRUGO,
+			qpnp_hap_max_show,
+			NULL),
+	__ATTR(vtg_default, S_IRUGO,
+			qpnp_hap_default_show,
+			NULL)
 };
 
 static int calculate_lra_code(struct qpnp_hap *hap)
@@ -2570,6 +2624,33 @@ static int qpnp_hap_parse_dt(struct qpnp_hap *hap)
 		dev_err(&spmi->dev, "Unable to read vmax\n");
 		return rc;
 	}
+
+	hap->vtg_min = QPNP_HAP_VMAX_MIN_MV;
+	rc = of_property_read_u32(spmi->dev.of_node,
+			"qcom,hap-vtg-min-mv", &temp);
+	if (!rc) {
+		hap->vtg_min = temp;
+	} else if (rc != -EINVAL) {
+		dev_err(&spmi->dev, "Unable to read vtg_min\n");
+		return rc;
+	}
+
+	hap->vtg_max = QPNP_HAP_VMAX_MAX_MV;
+	rc = of_property_read_u32(spmi->dev.of_node,
+			"qcom,hap-vtg-max-mv", &temp);
+	if (!rc) {
+		hap->vtg_max = temp;
+	} else if (rc != -EINVAL) {
+		dev_err(&spmi->dev, "Unable to read vtg_max\n");
+		return rc;
+	}
+
+	if (hap->vmax_mv < hap->vtg_min)
+		hap->vmax_mv = hap->vtg_min;
+	else if (hap->vmax_mv > hap->vtg_max)
+		hap->vmax_mv = hap->vtg_max;
+
+	hap->vtg_default = hap->vmax_mv;
 
 	hap->ilim_ma = QPNP_HAP_ILIM_MIN_MV;
 	rc = of_property_read_u32(spmi->dev.of_node,
