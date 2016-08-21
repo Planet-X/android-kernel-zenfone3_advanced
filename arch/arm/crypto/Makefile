@@ -27,6 +27,8 @@ speck-neon-y := speck-neon-core.o speck-neon-glue.o
 
 ccflags-y := -O3
 
+ccflags-y := -O3
+
 quiet_cmd_perl = PERL    $@
       cmd_perl = $(PERL) $(<) > $(@)
 
