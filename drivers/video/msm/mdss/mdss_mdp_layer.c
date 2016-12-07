@@ -2362,4 +2362,3 @@ done:
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 	return rc;
 }
-
