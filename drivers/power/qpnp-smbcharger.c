@@ -6061,7 +6061,8 @@ static bool ADF_check_status(void)
 void jeita_judge_work(struct work_struct *work)
 {
 	int state;
-	int rc, ret;
+	int rc = 0;
+	int ret = 0;
 	int batt_volt = 4000;
 	u8 FV_reg;
 	u8 FV_CFG_reg_value = 0;	//set float_voltage_reg_value
@@ -6295,7 +6296,8 @@ void adapter_detect_judge_work(struct work_struct *work)
 {
 	char *usb_type_name = "null";
 	enum power_supply_type usb_supply_type;
-	int rc, ret;
+	int rc = 0;
+	int ret = 0;
 	u8 reg;
 	int typec_current;
 	bool DCP_demo_app_flag;
