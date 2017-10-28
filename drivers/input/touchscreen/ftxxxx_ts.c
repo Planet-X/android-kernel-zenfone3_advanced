@@ -128,6 +128,9 @@ int gestrue_id = 0;
 #define DEBUG_RAW      8
 #define DEBUG_TRACE   10
 
+/* Define DEBUG_FOCAL_TOUCH_EVENTS in order to print touch up/down info messages to the kernel log. Errors will be logged regardless of this flag.*/
+#undef DEBUG_FOCAL_TOUCH_EVENTS
+
 static int debug = DEBUG_INFO;
 
 module_param(debug, int, 0644);
@@ -805,8 +808,10 @@ static void ftxxxx_report_value(struct ftxxxx_ts_data *data)
 			
 			report_touch_locatoin_count[i] += 1;
 			if ((report_touch_locatoin_count[i] % 200) == 0) {
-				printk("[Focal][Touch] id=%d event=%d x=%d y=%d pressure=%d area=%d\n", event->au8_finger_id[i],
-				event->au8_touch_event[i], event->au16_x[i], event->au16_y[i], event->pressure[i], event->area[i]);
+                                #ifdef DEBUG_FOCAL_TOUCH_EVENTS
+                                    printk("[Focal][Touch] id=%d event=%d x=%d y=%d pressure=%d area=%d\n", event->au8_finger_id[i],
+                                    event->au8_touch_event[i], event->au16_x[i], event->au16_y[i], event->pressure[i], event->area[i]);
+                                #endif
 				report_touch_locatoin_count[i] = 1;
 			}
 		}
@@ -873,15 +878,22 @@ static void ftxxxx_report_value(struct ftxxxx_ts_data *data)
 		/* +++ asus jacob add for print touch location +++ */
 		memset(report_touch_locatoin_count, 0, sizeof(report_touch_locatoin_count));
 		/* --- asus jacob add for print touch location --- */
+
 		input_report_key(data->input_dev, BTN_TOUCH, 0);
-		printk("[Focal][Touch] touch up !\n");
+
+                #ifdef DEBUG_FOCAL_TOUCH_EVENTS
+                    printk("[Focal][Touch] touch up !\n");
+                #endif
+
 	} else {
 		input_report_key(data->input_dev, BTN_TOUCH, event->touch_point > 0);
 		if (touch_down_up_status == 0) {
 			touch_down_up_status = 1;
-			printk("[Focal][Touch] touch down !\n");
-			printk("[Focal][Touch] id=%d event=%d x=%d y=%d pressure=%d area=%d\n", event->au8_finger_id[0],
-			event->au8_touch_event[0], event->au16_x[0], event->au16_y[0], event->pressure[0], event->area[0]);
+                        #ifdef DEBUG_FOCAL_TOUCH_EVENTS
+                            printk("[Focal][Touch] touch down !\n");
+                            printk("[Focal][Touch] id=%d event=%d x=%d y=%d pressure=%d area=%d\n", event->au8_finger_id[0],
+                            event->au8_touch_event[0], event->au16_x[0], event->au16_y[0], event->pressure[0], event->area[0]);
+                        #endif
 		}
 	}
 	input_sync(data->input_dev);
