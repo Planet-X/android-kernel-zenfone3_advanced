@@ -49,11 +49,8 @@ CONFIG_ARCH_MSM8953=y
 # CONFIG_ARCH_MSM8996 is not set
 # CONFIG_ARCH_MSMCOBALT is not set
 CONFIG_PCI_MSM=y
-<<<<<<< HEAD:arch/arm64/configs/msm8953-asus_defconfig
-=======
 CONFIG_SMP=y
 CONFIG_NR_CPUS=8
->>>>>>> 82785a34a5c7... Add various hotplugging solutions:arch/arm64/configs/ze552kl-userdebug_defconfig
 CONFIG_SCHED_MC=y
 CONFIG_PREEMPT=y
 CONFIG_CLEANCACHE=y
@@ -844,6 +841,7 @@ CONFIG_FREEZER=y
 #
 CONFIG_HOTPLUG=y
 CONFIG_HOTPLUG_CPU=y
+CONFIG_STATE_NOTIFIER=y
 
 #
 # Available hotplugging drivers:
