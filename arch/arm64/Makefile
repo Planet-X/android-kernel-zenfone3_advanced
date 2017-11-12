@@ -80,6 +80,7 @@ KASAN_SHADOW_OFFSET := $(shell printf "0x%08x00000000\n" $$(( \
 
 export	TEXT_OFFSET GZFLAGS
 
+core-y		+= arch/arm64/hotplug/
 core-y		+= arch/arm64/kernel/ arch/arm64/mm/
 core-$(CONFIG_NET) += arch/arm64/net/
 core-$(CONFIG_KVM) += arch/arm64/kvm/
