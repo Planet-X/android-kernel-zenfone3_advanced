@@ -42,7 +42,7 @@
 #define DEFAULT_MAX_CPUS_ONLINE		NR_CPUS
 /* cur_avg_load can be > 200! */
 #define DEFAULT_FAST_LANE_LOAD		180
-#define DEFAULT_FAST_LANE_MIN_FREQ	1574400
+#define DEFAULT_FAST_LANE_MIN_FREQ	1401600
 
 /*
  * debug = 1 will print info with dprintk.
