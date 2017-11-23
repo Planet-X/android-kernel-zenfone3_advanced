@@ -989,12 +989,13 @@ void print_active_locks(void)
 		if (pmsp_flag == 1) {
 			if(strncmp(ws->name, "PowerManagerService", strlen("PowerManagerService")) == 0)
 				pmsp_print(); /*call pms_printer_func() to send uevent 0 or 1: kernel/kernel/power/autosleep.c*/
-				//dump cpuinfo
-				printk("[PM] pm_stay_unattended_period: %d\n", pm_stay_unattended_period);
-				if( pm_stay_unattended_period >= PM_UNATTENDED_TIMEOUT*3 ) {
-					pm_stay_unattended_period = 0;
-					print_pm_cpuinfo(); /*call pm_cpuinfo_func() */
-			}
+                                
+                        //dump cpuinfo        
+                        printk("[PM] pm_stay_unattended_period: %d\n", pm_stay_unattended_period);
+                        if( pm_stay_unattended_period >= PM_UNATTENDED_TIMEOUT*3 ) {
+                                pm_stay_unattended_period = 0;
+                                print_pm_cpuinfo(); /*call pm_cpuinfo_func() */
+                        }
 		}
 		pmsp_flag = 0;
 	}

@@ -79,8 +79,10 @@ int msm_audio_effects_enable_extn(struct audio_client *ac,
 	if (effects->virtualizer.enable_flag)
 		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
 					params_length);
-	memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
-	params_length = 0;
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wmemset-elt-size"
+        memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
+        params_length = 0;
 	updt_params[0] = AUDPROC_MODULE_ID_BASS_BOOST;
 	updt_params[1] = AUDPROC_PARAM_ID_ENABLE;
 	updt_params[2] = BASS_BOOST_ENABLE_PARAM_SZ;
@@ -90,6 +92,7 @@ int msm_audio_effects_enable_extn(struct audio_client *ac,
 		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
 					params_length);
 	memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
+        #pragma GCC diagnostic pop
 	params_length = 0;
 	updt_params[0] = AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
 	updt_params[1] = AUDPROC_PARAM_ID_ENABLE;
