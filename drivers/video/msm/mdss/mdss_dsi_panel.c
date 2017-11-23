@@ -564,9 +564,9 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 	if (level < pinfo->bl_min)
 		level = pinfo->bl_min;
 
-	if ((g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_LCE || g_asus_lcdID == ZE552KL_LCD_TXD) && level <= ILI7807B_BL_THRESHOLD && level > 0)
+    if ((g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_LCE || g_asus_lcdID == ZE552KL_LCD_TXD) && level <= ILI7807B_BL_THRESHOLD && level > 0)
 		level =ILI7807B_BL_THRESHOLD;
-	else if ((g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM) && level <= R63350_BL_THRESHOLD &&  level > 0)	
+    else if ((g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM) && level <= R63350_BL_THRESHOLD &&  level > 0)	
 		level =R63350_BL_THRESHOLD;	
 		
 
@@ -1751,11 +1751,11 @@ static ssize_t cabc_proc_write(struct file *filp, const char *buff, size_t len, 
     if (copy_from_user(messages, buff, len))
         return -EFAULT;
 
-	if(strncmp(messages, "0", 1) == 0)  //off
+    if(strncmp(messages, "0", 1) == 0)  //off
         cabc_mode[1] = 0x0;
-	else if(strncmp(messages, "1", 1) == 0) //ui
+    else if(strncmp(messages, "1", 1) == 0) //ui
         cabc_mode[1] = 0x1;
-	else if(strncmp(messages, "2", 1) == 0) //still
+    else if(strncmp(messages, "2", 1) == 0) //still
         cabc_mode[1] = 0x2;
     else if(strncmp(messages, "3", 1) == 0) //moving
         cabc_mode[1] = 0x3;
