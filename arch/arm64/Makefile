@@ -26,6 +26,10 @@ else
 KBUILD_CFLAGS	+= $(call cc-ifversion, -ge, 0500, -DCONFIG_ARCH_SUPPORTS_INT128)
 endif
 
+# Cortex A53:
+KBUILD_CFLAGS	+= -mcpu=cortex-a53+crypto
+KBUILD_CFLAGS	+= -mtune=cortex-a53
+
 ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
 KBUILD_CPPFLAGS	+= -mbig-endian
 AS		+= -EB
