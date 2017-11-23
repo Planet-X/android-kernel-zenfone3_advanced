@@ -1332,6 +1332,7 @@ static int msm_probe(struct platform_device *pdev)
 		goto media_fail;
 
         #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wpragmas"
         #pragma GCC diagnostic ignored "-Wbool-compare"
         if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
 			0, NULL, 0)) < 0))

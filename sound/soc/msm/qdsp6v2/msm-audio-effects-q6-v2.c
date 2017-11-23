@@ -80,6 +80,7 @@ int msm_audio_effects_enable_extn(struct audio_client *ac,
 		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
 					params_length);
         #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wpragmas"
         #pragma GCC diagnostic ignored "-Wmemset-elt-size"
         memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
         params_length = 0;
