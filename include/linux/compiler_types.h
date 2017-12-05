@@ -221,4 +221,14 @@ struct ftrace_branch_data {
 # define __native_word(t) (sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
 #endif
 
+#ifndef __diag
+#define __diag(string)
+#endif
+
+#define __diag_push()			__diag(push)
+#define __diag_ignore(version, option)	__diag_ ## version (ignored option)
+#define __diag_warn(version, option)	__diag_ ## version (warning option)
+#define __diag_error(version, option)	__diag_ ## version (error   option)
+#define __diag_pop()			__diag(pop)
+
 #endif /* __LINUX_COMPILER_TYPES_H */
