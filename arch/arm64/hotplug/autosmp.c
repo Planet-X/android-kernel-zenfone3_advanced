@@ -558,10 +558,10 @@ static ssize_t store_min_boost_freq(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(boost_lock_duration, 644, show_boost_lock_duration,
+static DEVICE_ATTR(boost_lock_duration, 0644, show_boost_lock_duration,
 		   store_boost_lock_duration);
-static DEVICE_ATTR(cpus_boosted, 644, show_cpus_boosted, store_cpus_boosted);
-static DEVICE_ATTR(min_boost_freq, 644, show_min_boost_freq,
+static DEVICE_ATTR(cpus_boosted, 0644, show_cpus_boosted, store_cpus_boosted);
+static DEVICE_ATTR(min_boost_freq, 0644, show_min_boost_freq,
 		   store_min_boost_freq);
 
 static struct attribute *asmp_attributes[] = {
