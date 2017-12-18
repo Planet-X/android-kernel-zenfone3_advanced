@@ -44,6 +44,7 @@
 #include <linux/of_platform.h>
 #include <linux/efi.h>
 #include <linux/personality.h>
+#include <linux/dma-mapping.h>
 
 #include <asm/fixmap.h>
 #include <asm/cpu.h>
@@ -52,6 +53,7 @@
 #include <asm/cputable.h>
 #include <asm/cpufeature.h>
 #include <asm/cpu_ops.h>
+#include <asm/kasan.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
@@ -68,6 +70,9 @@ EXPORT_SYMBOL(processor_id);
 unsigned long elf_hwcap __read_mostly;
 EXPORT_SYMBOL_GPL(elf_hwcap);
 
+char* (*arch_read_hardware_id)(void);
+EXPORT_SYMBOL(arch_read_hardware_id);
+
 #ifdef CONFIG_COMPAT
 #define COMPAT_ELF_HWCAP_DEFAULT	\
 				(COMPAT_HWCAP_HALF|COMPAT_HWCAP_THUMB|\
@@ -80,9 +85,16 @@ unsigned int compat_elf_hwcap __read_mostly = COMPAT_ELF_HWCAP_DEFAULT;
 unsigned int compat_elf_hwcap2 __read_mostly;
 #endif
 
-DECLARE_BITMAP(cpu_hwcaps, NCAPS);
+DECLARE_BITMAP(cpu_hwcaps, ARM64_NCAPS);
+
+unsigned int boot_reason;
+EXPORT_SYMBOL(boot_reason);
+
+unsigned int cold_boot;
+EXPORT_SYMBOL(cold_boot);
 
 static const char *cpu_name;
+static const char *machine_name;
 phys_addr_t __fdt_pointer __initdata;
 
 /*
@@ -314,6 +326,12 @@ static void __init setup_machine_fdt(phys_addr_t dt_phys)
 		while (true)
 			cpu_relax();
 	}
+
+	machine_name = of_flat_dt_get_machine_name();
+	if (machine_name) {
+		dump_stack_set_arch_desc("%s (DT)", machine_name);
+		pr_info("Machine: %s\n", machine_name);
+	}
 }
 
 /*
@@ -363,7 +381,72 @@ static void __init request_standard_resources(void)
 	}
 }
 
+#ifdef CONFIG_BLK_DEV_INITRD
+/*
+ * Relocate initrd if it is not completely within the linear mapping.
+ * This would be the case if mem= cuts out all or part of it.
+ */
+static void __init relocate_initrd(void)
+{
+	phys_addr_t orig_start = __virt_to_phys(initrd_start);
+	phys_addr_t orig_end = __virt_to_phys(initrd_end);
+	phys_addr_t ram_end = memblock_end_of_DRAM();
+	phys_addr_t new_start;
+	unsigned long size, to_free = 0;
+	void *dest;
+
+	if (orig_end <= ram_end)
+		return;
+
+	/*
+	 * Any of the original initrd which overlaps the linear map should
+	 * be freed after relocating.
+	 */
+	if (orig_start < ram_end)
+		to_free = ram_end - orig_start;
+
+	size = orig_end - orig_start;
+	if (!size)
+		return;
+
+	/* initrd needs to be relocated completely inside linear mapping */
+	new_start = memblock_find_in_range(0, PFN_PHYS(max_pfn),
+					   size, PAGE_SIZE);
+	if (!new_start)
+		panic("Cannot relocate initrd of size %ld\n", size);
+	memblock_reserve(new_start, size);
+
+	initrd_start = __phys_to_virt(new_start);
+	initrd_end   = initrd_start + size;
+
+	pr_info("Moving initrd from [%llx-%llx] to [%llx-%llx]\n",
+		orig_start, orig_start + size - 1,
+		new_start, new_start + size - 1);
+
+	dest = (void *)initrd_start;
+
+	if (to_free) {
+		memcpy(dest, (void *)__phys_to_virt(orig_start), to_free);
+		dest += to_free;
+	}
+
+	copy_from_early_mem(dest, orig_start + to_free, size - to_free);
+
+	if (to_free) {
+		pr_info("Freeing original RAMDISK from [%llx-%llx]\n",
+			orig_start, orig_start + to_free - 1);
+		memblock_free(orig_start, to_free);
+	}
+}
+#else
+static inline void __init relocate_initrd(void)
+{
+}
+#endif
+
 u64 __cpu_logical_map[NR_CPUS] = { [0 ... NR_CPUS-1] = INVALID_HWID };
+
+void __init __weak init_random_pool(void) { }
 
 void __init setup_arch(char **cmdline_p)
 {
@@ -378,6 +461,7 @@ void __init setup_arch(char **cmdline_p)
 
 	*cmdline_p = boot_command_line;
 
+	early_fixmap_init();
 	early_ioremap_init();
 
 	parse_early_param();
@@ -392,9 +476,13 @@ void __init setup_arch(char **cmdline_p)
 	arm64_memblock_init();
 
 	paging_init();
+	relocate_initrd();
+
+	kasan_init();
+
 	request_standard_resources();
 
-	efi_idmap_init();
+	efi_virtmap_init();
 	early_ioremap_reset();
 
 	unflatten_device_tree();
@@ -415,6 +503,7 @@ void __init setup_arch(char **cmdline_p)
 	conswitchp = &dummy_con;
 #endif
 #endif
+	init_random_pool();
 }
 
 static int __init arm64_device_init(void)
@@ -436,7 +525,7 @@ static int __init topology_init(void)
 
 	return 0;
 }
-subsys_initcall(topology_init);
+postcore_initcall(topology_init);
 
 static const char *hwcap_str[] = {
 	"fp",
@@ -473,7 +562,8 @@ static const char *compat_hwcap_str[] = {
 	"idivt",
 	"vfpd32",
 	"lpae",
-	"evtstrm"
+	"evtstrm",
+	NULL
 };
 
 static const char *compat_hwcap2_str[] = {
@@ -490,7 +580,9 @@ static int c_show(struct seq_file *m, void *v)
 {
 	int i, j;
 
-	for_each_online_cpu(i) {
+	seq_printf(m, "Processor\t: %s rev %d (%s)\n",
+		cpu_name, read_cpuid_id() & 15, ELF_PLATFORM);
+	for_each_present_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
 		u32 midr = cpuinfo->reg_midr;
 
@@ -539,6 +631,11 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
 	}
 
+	if (!arch_read_hardware_id)
+		seq_printf(m, "Hardware\t: %s\n", machine_name);
+	else
+		seq_printf(m, "Hardware\t: %s\n", arch_read_hardware_id());
+
 	return 0;
 }
 
@@ -563,3 +660,9 @@ const struct seq_operations cpuinfo_op = {
 	.stop	= c_stop,
 	.show	= c_show
 };
+
+void arch_setup_pdev_archdata(struct platform_device *pdev)
+{
+	pdev->archdata.dma_mask = DMA_BIT_MASK(32);
+	pdev->dev.dma_mask = &pdev->archdata.dma_mask;
+}

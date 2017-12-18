@@ -50,6 +50,10 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
+source "drivers/slimbus/Kconfig"
+
+source "drivers/soundwire/Kconfig"
+
 source "drivers/spi/Kconfig"
 
 source "drivers/spmi/Kconfig"
@@ -100,6 +104,8 @@ source "drivers/memstick/Kconfig"
 
 source "drivers/leds/Kconfig"
 
+source "drivers/switch/Kconfig"
+
 source "drivers/accessibility/Kconfig"
 
 source "drivers/infiniband/Kconfig"
@@ -107,6 +113,8 @@ source "drivers/infiniband/Kconfig"
 source "drivers/edac/Kconfig"
 
 source "drivers/rtc/Kconfig"
+
+source "drivers/esoc/Kconfig"
 
 source "drivers/dma/Kconfig"
 
@@ -172,6 +180,8 @@ source "drivers/reset/Kconfig"
 
 source "drivers/fmc/Kconfig"
 
+source "drivers/coresight/Kconfig"
+
 source "drivers/phy/Kconfig"
 
 source "drivers/powercap/Kconfig"
@@ -181,5 +191,28 @@ source "drivers/mcb/Kconfig"
 source "drivers/ras/Kconfig"
 
 source "drivers/thunderbolt/Kconfig"
+
+source "drivers/sensors/Kconfig"
+
+source "drivers/firmware/Kconfig"
+
+source "drivers/bif/Kconfig"
+
+
+config TEXURA_USERDEBUG
+	bool "Texura userdebug module for ASUS ZE500KL"
+	depends on NLS_UTF8
+	default n
+	help
+	  Say Y here if you want support Texura userdebug module at ZE500KL
+	  Say N here if you want support Texura user module at ZE500KL
+
+config TEXURA_ARM64
+	bool "Texura userdebug module for QCOM ARM64"
+	depends on NLS_UTF8
+	default n
+	help
+	  Say Y here if you want support Texura userdebug module at QCOM ARM64
+	  Say N here if you want support Texura user module at ACOM ARM32
 
 endmenu

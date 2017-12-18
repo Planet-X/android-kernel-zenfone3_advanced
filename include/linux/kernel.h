@@ -14,6 +14,47 @@
 #include <linux/dynamic_debug.h>
 #include <asm/byteorder.h>
 #include <uapi/linux/kernel.h>
+#include <linux/asusdebug.h>
+
+// +++ ASUS_BSP : add for miniporting
+enum DEVICE_HWID
+{
+	//ZE500KL
+	ZE552KL_EVB = 0x0,
+	ZE552KL_SR1 = 0x1,
+	ZE552KL_SR2 = 0x2,
+	ZE552KL_ER1 = 0x3,
+	ZE552KL_ER2 = 0x4,
+	ZE552KL_PR  = 0x5,
+	ZE552KL_PR2 = 0x6,
+	ZE552KL_MP  = 0x7,
+
+	ZE520KL_EVB = 0x10,
+	ZE520KL_SR1 = 0x11,
+	ZE520KL_SR2 = 0x12,
+	ZE520KL_ER1 = 0x13,
+	ZE520KL_ER2 = 0x14,
+	ZE520KL_PR  = 0x15,
+	ZE520KL_PR2 = 0x16,
+	ZE520KL_MP  = 0x17,
+
+
+	ZE552KL_UNKNOWN = 0xFF
+};
+extern enum DEVICE_HWID g_ASUS_hwID;
+// --- ASUS_BSP : add for miniporting
+
+//ASUS_BSP: +++
+enum {
+	ZE520KL_LCD_BOE = 0,
+	ZE552KL_LCD_CTC,
+	ZE520KL_LCD_TM,
+	ZE552KL_LCD_TM,
+	ZE552KL_LCD_TXD,
+	ZE552KL_LCD_LCE
+};
+extern int g_asus_lcdID;
+//ASUS_BSP: ---
 
 #define USHRT_MAX	((u16)(~0U))
 #define SHRT_MAX	((s16)(USHRT_MAX>>1))
@@ -101,6 +142,18 @@
 	 ((typeof(divisor))-1) > 0 || (__x) > 0) ?	\
 		(((__x) + ((__d) / 2)) / (__d)) :	\
 		(((__x) - ((__d) / 2)) / (__d));	\
+}							\
+)
+/*
+ * Same as above but for u64 dividends. divisor must be a 32-bit
+ * number.
+ */
+#define DIV_ROUND_CLOSEST_ULL(x, divisor)(		\
+{							\
+	typeof(divisor) __d = divisor;			\
+	unsigned long long _tmp = (x) + (__d) / 2;	\
+	do_div(_tmp, __d);				\
+	_tmp;						\
 }							\
 )
 
@@ -376,6 +429,10 @@ extern unsigned long simple_strtoul(const char *,char **,unsigned int);
 extern long simple_strtol(const char *,char **,unsigned int);
 extern unsigned long long simple_strtoull(const char *,char **,unsigned int);
 extern long long simple_strtoll(const char *,char **,unsigned int);
+#define strict_strtoul	kstrtoul
+#define strict_strtol	kstrtol
+#define strict_strtoull	kstrtoull
+#define strict_strtoll	kstrtoll
 
 extern int num_to_str(char *buf, int size, unsigned long long num);
 
@@ -814,4 +871,8 @@ static inline void ftrace_dump(enum ftrace_dump_mode oops_dump_mode) { }
 	 /* Other writable?  Generally considered a bad idea. */	\
 	 BUILD_BUG_ON_ZERO((perms) & 2) +				\
 	 (perms))
+
+/* To identify board information in panic logs, set this */
+extern char *mach_panic_string;
+
 #endif

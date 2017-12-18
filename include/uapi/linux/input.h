@@ -152,7 +152,12 @@ struct input_keymap_entry {
 #define EVIOCGEFFECTS		_IOR('E', 0x84, int)			/* Report number of effects playable at the same time */
 
 #define EVIOCGRAB		_IOW('E', 0x90, int)			/* Grab/Release device */
-#define EVIOCREVOKE		_IOW('E', 0x91, int)			/* Revoke device access */
+
+/* HACK: disable conflicting EVIOCREVOKE until Android userspace stops using EVIOCSSUSPENDBLOCK */
+/*#define EVIOCREVOKE		_IOW('E', 0x91, int)*/			/* Revoke device access */
+
+#define EVIOCGSUSPENDBLOCK	_IOR('E', 0x91, int)			/* get suspend block enable */
+#define EVIOCSSUSPENDBLOCK	_IOW('E', 0x91, int)			/* set suspend block enable */
 
 #define EVIOCSCLOCKID		_IOW('E', 0xa0, int)			/* Set clockid to be used for timestamps */
 
@@ -166,6 +171,7 @@ struct input_keymap_entry {
 #define INPUT_PROP_SEMI_MT		0x03	/* touch rectangle only */
 #define INPUT_PROP_TOPBUTTONPAD		0x04	/* softbuttons at top of pad */
 #define INPUT_PROP_POINTING_STICK	0x05	/* is a pointing stick */
+#define INPUT_PROP_NO_DUMMY_RELEASE	0x06	/* no dummy event */
 
 #define INPUT_PROP_MAX			0x1f
 #define INPUT_PROP_CNT			(INPUT_PROP_MAX + 1)
@@ -474,6 +480,17 @@ struct input_keymap_entry {
 #define KEY_RFKILL		247	/* Key that controls all radios */
 
 #define KEY_MICMUTE		248	/* Mute / unmute the microphone */
+
+
+// BEGIN: jacob_kung@asus.com: keycode for fingerprint gestures
+#define FRINGERPRINT_SWIPE_UP 827 // 827
+#define FRINGERPRINT_SWIPE_DOWN 828 // 828
+#define FRINGERPRINT_SWIPE_LEFT 829 // 829
+#define FRINGERPRINT_SWIPE_RIGHT 830 // 830
+#define FRINGERPRINT_TAP 831 // 831
+#define FRINGERPRINT_DTAP 832 // 832
+#define FRINGERPRINT_LONGPRESS 833 // 833
+// END: jacob_kung@asus.com
 
 /* Code 255 is reserved for special needs of AT keyboard driver */
 
@@ -790,7 +807,7 @@ struct input_keymap_entry {
 
 /* We avoid low common keys in module aliases so they don't get huge. */
 #define KEY_MIN_INTERESTING	KEY_MUTE
-#define KEY_MAX			0x2ff
+#define KEY_MAX			0x3ff
 #define KEY_CNT			(KEY_MAX+1)
 
 /*
@@ -883,8 +900,12 @@ struct input_keymap_entry {
 #define SW_FRONT_PROXIMITY	0x0b  /* set = front proximity sensor active */
 #define SW_ROTATE_LOCK		0x0c  /* set = rotate locked/disabled */
 #define SW_LINEIN_INSERT	0x0d  /* set = inserted */
-#define SW_MUTE_DEVICE		0x0e  /* set = device disabled */
-#define SW_MAX			0x0f
+#define SW_HPHL_OVERCURRENT	0x0e  /* set = over current on left hph */
+#define SW_HPHR_OVERCURRENT	0x0f  /* set = over current on right hph */
+#define SW_UNSUPPORT_INSERT	0x10  /* set = unsupported device inserted */
+#define SW_MICROPHONE2_INSERT   0x11  /* set = inserted */
+#define SW_MUTE_DEVICE		0x12  /* set = device disabled */
+#define SW_MAX			0x20
 #define SW_CNT			(SW_MAX+1)
 
 /*

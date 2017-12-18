@@ -32,10 +32,12 @@
 #include <linux/cpufreq.h>
 #include <linux/cpuidle.h>
 #include <linux/timer.h>
+#include <linux/wakeup_reason.h>
 
 #include "../base.h"
 #include "power.h"
 
+unsigned int pm_pwrcs_ret=0; /* [PM] This flag can check dpm_suspend state for resume_console in printk.c */
 typedef int (*pm_callback_t)(struct device *);
 
 /*
@@ -57,6 +59,12 @@ static LIST_HEAD(dpm_noirq_list);
 struct suspend_stats suspend_stats;
 static DEFINE_MUTEX(dpm_list_mtx);
 static pm_message_t pm_transition;
+
+static void dpm_drv_timeout(unsigned long data);
+struct dpm_drv_wd_data {
+	struct device *dev;
+	struct task_struct *tsk;
+};
 
 static int async_error;
 
@@ -158,6 +166,12 @@ void device_pm_move_before(struct device *deva, struct device *devb)
 	pr_debug("PM: Moving %s:%s before %s:%s\n",
 		 deva->bus ? deva->bus->name : "No Bus", dev_name(deva),
 		 devb->bus ? devb->bus->name : "No Bus", dev_name(devb));
+	if (!((devb->pm_domain) || (devb->type && devb->type->pm)
+		|| (devb->class && (devb->class->pm || devb->class->resume))
+		|| (devb->bus && (devb->bus->pm || devb->bus->resume)) ||
+		(devb->driver && devb->driver->pm))) {
+		device_pm_add(devb);
+	}
 	/* Delete deva from dpm_list and reinsert before devb. */
 	list_move_tail(&deva->power.entry, &devb->power.entry);
 }
@@ -172,6 +186,12 @@ void device_pm_move_after(struct device *deva, struct device *devb)
 	pr_debug("PM: Moving %s:%s after %s:%s\n",
 		 deva->bus ? deva->bus->name : "No Bus", dev_name(deva),
 		 devb->bus ? devb->bus->name : "No Bus", dev_name(devb));
+	if (!((devb->pm_domain) || (devb->type && devb->type->pm)
+		|| (devb->class && (devb->class->pm || devb->class->resume))
+		|| (devb->bus && (devb->bus->pm || devb->bus->resume)) ||
+		(devb->driver && devb->driver->pm))) {
+		device_pm_add(devb);
+	}
 	/* Delete deva from dpm_list and reinsert after devb. */
 	list_move(&deva->power.entry, &devb->power.entry);
 }
@@ -351,8 +371,12 @@ static void pm_dev_dbg(struct device *dev, pm_message_t state, char *info)
 static void pm_dev_err(struct device *dev, pm_message_t state, char *info,
 			int error)
 {
-	printk(KERN_ERR "PM: Device %s failed to %s%s: error %d\n",
+	printk("[PM]: Device %s failed to %s%s: error %d\n",
 		dev_name(dev), pm_verb(state.event), info, error);
+	//[+++] Add debug log for suspend and resume when pm_dev_err
+	ASUSEvtlog("PM: Device %s failed to %s%s: error %d\n",
+		dev_name(dev), pm_verb(state.event), info, error);
+	//[---] Add debug log for suspend and resume when pm_dev_err
 }
 
 static void dpm_show_time(ktime_t starttime, pm_message_t state, char *info)
@@ -825,6 +849,30 @@ static void async_resume(void *data, async_cookie_t cookie)
 	if (error)
 		pm_dev_err(dev, pm_transition, " async", error);
 	put_device(dev);
+}
+
+/**
+ *	dpm_drv_timeout - Driver suspend / resume watchdog handler
+ *	@data: struct device which timed out
+ *
+ * 	Called when a driver has timed out suspending or resuming.
+ * 	There's not much we can do here to recover so
+ * 	BUG() out for a crash-dump
+ *
+ */
+static void dpm_drv_timeout(unsigned long data)
+{
+	struct dpm_drv_wd_data *wd_data = (void *)data;
+	struct device *dev = wd_data->dev;
+	struct task_struct *tsk = wd_data->tsk;
+
+	printk(KERN_EMERG "**** DPM device timeout: %s (%s)\n", dev_name(dev),
+	       (dev->driver ? dev->driver->name : "no driver"));
+
+	printk(KERN_EMERG "dpm suspend stack:\n");
+	show_stack(tsk, NULL);
+
+	BUG();
 }
 
 /**
@@ -1336,6 +1384,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	pm_callback_t callback = NULL;
 	char *info = NULL;
 	int error = 0;
+	struct timer_list timer;
+	struct dpm_drv_wd_data data;
+	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
 	DECLARE_DPM_WATCHDOG_ON_STACK(wd);
 
 	dpm_wait_for_children(dev, async);
@@ -1353,12 +1404,23 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		pm_wakeup_event(dev, 0);
 
 	if (pm_wakeup_pending()) {
+		pm_get_active_wakeup_sources(suspend_abort,
+			MAX_SUSPEND_ABORT_LEN);
+		log_suspend_abort_reason(suspend_abort);
 		async_error = -EBUSY;
 		goto Complete;
 	}
 
 	if (dev->power.syscore)
 		goto Complete;
+	
+	data.dev = dev;
+	data.tsk = get_current();
+	init_timer_on_stack(&timer);
+	timer.expires = jiffies + HZ * 12;
+	timer.function = dpm_drv_timeout;
+	timer.data = (unsigned long)&data;
+	add_timer(&timer);
 
 	if (dev->power.direct_complete) {
 		if (pm_runtime_status_suspended(dev)) {
@@ -1439,6 +1501,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	device_unlock(dev);
 	dpm_watchdog_clear(&wd);
 
+	del_timer_sync(&timer);
+	destroy_timer_on_stack(&timer);
+
  Complete:
 	complete_all(&dev->power.completion);
 	if (error)
@@ -1512,6 +1577,7 @@ int dpm_suspend(pm_message_t state)
 		if (async_error)
 			break;
 	}
+	pm_pwrcs_ret = 1; /* [PM] This flag can check dpm_suspend state for resume_console in printk.c */
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
 	if (!error)
@@ -1628,7 +1694,7 @@ int dpm_prepare(pm_message_t state)
 				error = 0;
 				continue;
 			}
-			printk(KERN_INFO "PM: Device %s not prepared "
+			printk("[PM] dpm_prepare():Device %s not prepared "
 				"for power transition: code %d\n",
 				dev_name(dev), error);
 			put_device(dev);
@@ -1655,6 +1721,7 @@ int dpm_suspend_start(pm_message_t state)
 {
 	int error;
 
+	printk("[PM] dpm_suspend_start(): call dpm_prepare()\n");
 	error = dpm_prepare(state);
 	if (error) {
 		suspend_stats.failed_prepare++;
