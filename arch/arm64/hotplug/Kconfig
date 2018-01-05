@@ -25,10 +25,3 @@ config INTELLI_HOTPLUG
 	help
 	  An intelligent cpu hotplug driver for
 	  Low Latency Frequency Transition capable processors.
-
-config MAKO_HOTPLUG
-        bool "Mako hotplug driver by franciscofranco"
-        depends on HOTPLUG_CPU
-        default n
-        help
-          Hotplugging driver by franciscofranco.
