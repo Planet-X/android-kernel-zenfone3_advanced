@@ -26,14 +26,6 @@ config INTELLI_HOTPLUG
 	  An intelligent cpu hotplug driver for
 	  Low Latency Frequency Transition capable processors.
 
-config AUTOSMP
-	bool "Multi-core automatic hotplug support"
-	depends on SMP && HOTPLUG_CPU
-	default n
-	help
-	  Automatically hotplugs the multiple cpu cores on and off
-	  based on cpu load and suspend state.
-
 config MAKO_HOTPLUG
         bool "Mako hotplug driver by franciscofranco"
         depends on HOTPLUG_CPU
