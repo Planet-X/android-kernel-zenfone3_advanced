@@ -550,9 +550,9 @@ void __dynamic_pr_debug(struct _ddebug *descriptor, const char *fmt, ...)
 
 	vaf.fmt = fmt;
 	vaf.va = &args;
-
-	printk(KERN_DEBUG "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
-
+//ASUS_BSP+++ "[libra][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
+	printk(KERN_INFO "%s%pV", dynamic_emit_prefix(descriptor, buf), &vaf);
+//ASUS_BSP--- "[libra][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
 	va_end(args);
 }
 EXPORT_SYMBOL(__dynamic_pr_debug);
@@ -572,14 +572,16 @@ void __dynamic_dev_dbg(struct _ddebug *descriptor,
 	vaf.va = &args;
 
 	if (!dev) {
-		printk(KERN_DEBUG "(NULL device *): %pV", &vaf);
+//ASUS_BSP+++ "[libra][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
+		printk(KERN_INFO "(NULL device *): %pV", &vaf);
 	} else {
 		char buf[PREFIX_SIZE];
 
-		dev_printk_emit(7, dev, "%s%s %s: %pV",
+		dev_printk_emit(6, dev, "%s%s %s: %pV",
 				dynamic_emit_prefix(descriptor, buf),
 				dev_driver_string(dev), dev_name(dev),
 				&vaf);
+//ASUS_BSP--- "[libra][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
 	}
 
 	va_end(args);
@@ -604,8 +606,9 @@ void __dynamic_netdev_dbg(struct _ddebug *descriptor,
 
 	if (dev && dev->dev.parent) {
 		char buf[PREFIX_SIZE];
+//ASUS_BSP+++ "[Libera][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
 
-		dev_printk_emit(7, dev->dev.parent,
+		dev_printk_emit(6, dev->dev.parent,
 				"%s%s %s %s%s: %pV",
 				dynamic_emit_prefix(descriptor, buf),
 				dev_driver_string(dev->dev.parent),
@@ -613,10 +616,11 @@ void __dynamic_netdev_dbg(struct _ddebug *descriptor,
 				netdev_name(dev), netdev_reg_state(dev),
 				&vaf);
 	} else if (dev) {
-		printk(KERN_DEBUG "%s%s: %pV", netdev_name(dev),
+		printk(KERN_INFO "%s%s: %pV", netdev_name(dev),
 		       netdev_reg_state(dev), &vaf);
 	} else {
-		printk(KERN_DEBUG "(NULL net_device): %pV", &vaf);
+		printk(KERN_INFO "(NULL net_device): %pV", &vaf);
+//ASUS_BSP--- "[Libera][USBH][NA][Others] Raise the dynamic debugging level from KERN_DEBUG to KERN_INFO"
 	}
 
 	va_end(args);

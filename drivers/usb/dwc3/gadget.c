@@ -2046,7 +2046,7 @@ static int dwc3_gadget_pullup(struct usb_gadget *g, int is_on)
 	 * increment pm usage count of dwc to prevent pm_runtime_suspend
 	 * during enumeration.
 	 */
-	dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
+	dev_info(dwc->dev, "Notify OTG from %s\n", __func__);
 	dwc->b_suspend = false;
 	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
 
@@ -2911,7 +2911,7 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 {
 	int			reg;
 
-	dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
+	dev_info(dwc->dev, "Notify OTG from %s\n", __func__);
 	dwc->b_suspend = false;
 	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
 
@@ -2980,9 +2980,15 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 			dwc3_gadget_disconnect_interrupt(dwc);
 	}
 
-	dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
+	dev_info(dwc->dev, "Notify OTG from %s\n", __func__);
 	dwc->b_suspend = false;
 	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
+
+	#if defined(CONFIG_UNKNOWN_CHARGER)
+	// ASUS_BSP "Add Unknown Charger Support"
+	// We need another event specific for HOST reset interrupt
+	dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_RESET, 0);
+	#endif
 
 	dbg_event(0xFF, "BUS RST", 0);
 	/* after reset -> Default State */
@@ -3181,7 +3187,7 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc, bool remote_wakeup)
 		 * In case of remote wake up dwc3_gadget_wakeup_work()
 		 * is doing pm_runtime_get_sync().
 		 */
-		dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
+		dev_info(dwc->dev, "Notify OTG from %s\n", __func__);
 		dwc->b_suspend = false;
 		dwc3_notify_event(dwc,
 				DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
@@ -3348,7 +3354,7 @@ static void dwc3_gadget_suspend_interrupt(struct dwc3 *dwc,
 
 		dwc3_suspend_gadget(dwc);
 
-		dev_dbg(dwc->dev, "Notify OTG from %s\n", __func__);
+		dev_info(dwc->dev, "Notify OTG from %s\n", __func__);
 		dwc->b_suspend = true;
 		dwc3_notify_event(dwc, DWC3_CONTROLLER_NOTIFY_OTG_EVENT, 0);
 	}

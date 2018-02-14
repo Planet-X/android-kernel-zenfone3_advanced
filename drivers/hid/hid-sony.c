@@ -1104,7 +1104,7 @@ static int sony_input_configured(struct hid_device *hdev,
 					struct hid_input *hidinput)
 {
 	struct sony_sc *sc = hid_get_drvdata(hdev);
-	int ret;
+	int ret = 0;
 
 	/*
 	 * The Dualshock 4 touchpad supports 2 touches and has a

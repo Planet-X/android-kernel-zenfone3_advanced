@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/spmi.h>
 #include <linux/usb/class-dual-role.h>
+#include <linux/proc_fs.h>
 
 #define CREATE_MASK(NUM_BITS, POS) \
 	((unsigned char) (((1 << (NUM_BITS)) - 1) << (POS)))
@@ -50,10 +51,11 @@
 #define VALID_DFP_MASK			TYPEC_MASK(6, 4)
 
 #define TYPEC_SW_CTL_REG(base)		(base + 0x52)
+#define CABLE_RP_CONNECT_THRESHOLD_BIT	BIT(1)
 
-#define TYPEC_STD_MA			900
-#define TYPEC_MED_MA			1500
-#define TYPEC_HIGH_MA			3000
+#define TYPEC_STD_MA			500		//Austin_T:900>>500
+#define TYPEC_MED_MA			1400	//1500>>1400
+#define TYPEC_HIGH_MA			1910	//3000>>1910
 
 #define QPNP_TYPEC_DEV_NAME	"qcom,qpnp-typec"
 #define TYPEC_PSY_NAME		"typec"
@@ -64,6 +66,9 @@ enum cc_line_state {
 	CC_2,
 	OPEN,
 };
+
+static struct qpnp_typec_chip *typec_dev;		//ASUS BSP Austin_T : global chip
+static int SMMI_CC_line;
 
 struct typec_wakeup_source {
 	struct wakeup_source	source;
@@ -350,6 +355,7 @@ static int qpnp_typec_handle_usb_insertion(struct qpnp_typec_chip *chip, u8 reg)
 	}
 
 	chip->cc_line_state = cc_line_state;
+	SMMI_CC_line = cc_line_state;
 
 	pr_debug("CC_line state = %d\n", cc_line_state);
 
@@ -374,6 +380,7 @@ static int qpnp_typec_handle_detach(struct qpnp_typec_chip *chip)
 	if (rc)
 		pr_err("failed to set TYPEC MODE on battery psy rc=%d\n", rc);
 
+	SMMI_CC_line = OPEN;
 	pr_debug("CC_line state = %d current_ma = %d in_force_mode = %d\n",
 			chip->cc_line_state, chip->current_ma,
 			chip->in_force_mode);
@@ -666,7 +673,7 @@ static int qpnp_typec_request_irqs(struct qpnp_typec_chip *chip)
 	REQUEST_IRQ(chip, chip->dfp_detect, "dfp-detect", dfp_detect_handler,
 			flags, true, rc);
 	REQUEST_IRQ(chip, chip->vbus_err, "vbus-err", vbus_err_handler,
-			flags, true, rc);
+			flags, false, rc);
 	REQUEST_IRQ(chip, chip->vconn_oc, "vconn-oc", vconn_oc_handler,
 			flags, true, rc);
 
@@ -869,6 +876,57 @@ static int qpnp_typec_dr_get_property(struct dual_role_phy_instance *dual_role,
 	return 0;
 }
 
+int typec_CHG_TYPE_current(void)
+{	
+	int CHG_TYPE_current;
+	int rc;
+	u8 reg;
+
+	rc = qpnp_typec_read(typec_dev, &reg, TYPEC_UFP_STATUS_REG(typec_dev->base), 1);
+	if (rc) {
+		pr_err("failed to read status reg rc=%d\n", rc);
+	}
+
+	CHG_TYPE_current = get_max_current(reg & TYPEC_CURRENT_MASK);
+
+	return CHG_TYPE_current;
+}
+EXPORT_SYMBOL(typec_CHG_TYPE_current);
+
+/*+++BSP Austin_T BMMI Adb Interface+++*/
+#define	TypeC_Side_Detect_PROC_FILE	"driver/TypeC_Side_Detect"
+static struct proc_dir_entry *TypeC_Side_Detect_proc_file;
+static int TypeC_Side_Detect_proc_read(struct seq_file *buf, void *v)
+{
+	int ret = -1;
+
+	ret = SMMI_CC_line;
+
+	seq_printf(buf, "%d\n", ret);
+	return 0;
+}
+static int TypeC_Side_Detect_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, TypeC_Side_Detect_proc_read, NULL);
+}
+
+static const struct file_operations TypeC_Side_Detect_fops = {
+	.owner = THIS_MODULE,
+	.open = TypeC_Side_Detect_proc_open,
+	.read = seq_read,
+};
+void static create_TypeC_Side_Detect_proc_file(void)
+{
+	TypeC_Side_Detect_proc_file = proc_create(TypeC_Side_Detect_PROC_FILE, 0644, NULL, &TypeC_Side_Detect_fops);
+
+	if (TypeC_Side_Detect_proc_file) {
+		printk("[Proc]%s TypeC_Side_Detect proc_file sucessed!\n", __FUNCTION__);
+	} else{
+		printk("[Proc]%s TypeC_Side_Detect proc_file failed!\n", __FUNCTION__);
+	}
+}
+/*---BSP Austin_T BMMI Adb Interface---*/
+
 static int qpnp_typec_probe(struct spmi_device *spmi)
 {
 	int rc;
@@ -914,6 +972,9 @@ static int qpnp_typec_probe(struct spmi_device *spmi)
 	chip->type_c_psy.properties	= qpnp_typec_properties;
 	chip->type_c_psy.num_properties	= ARRAY_SIZE(qpnp_typec_properties);
 
+	typec_dev = chip;						//ASUS BSP Austin_Tseng
+	create_TypeC_Side_Detect_proc_file();
+
 	rc = power_supply_register(chip->dev, &chip->type_c_psy);
 	if (rc < 0) {
 		pr_err("Unable to register  type_c_psy rc=%d\n", rc);
@@ -955,6 +1016,13 @@ static int qpnp_typec_probe(struct spmi_device *spmi)
 		pr_err("failed to request irqs rc=%d\n", rc);
 		goto unregister_psy;
 	}
+
+//ASUS BSP Austin_T : Set CABLE_RP_CONNECT_THRESHOLD 0.6V +++
+	rc = qpnp_typec_masked_write(chip, TYPEC_SW_CTL_REG(chip->base),
+		CABLE_RP_CONNECT_THRESHOLD_BIT, 0);
+	if (rc < 0)
+		pr_err("Couldn't set CABLE_RP_CONNECT_THRESHOLD rc = %d\n", rc);
+//ASUS BSP Austin_T : Set CABLE_RP_CONNECT_THRESHOLD 0.6V ---
 
 	pr_info("TypeC successfully probed state=%d CC-line-state=%d\n",
 			chip->typec_state, chip->cc_line_state);

@@ -28,6 +28,13 @@ struct panel_id {
 	u16 type;
 };
 
+//ASUS_BSP: Austin ++
+struct panel_list {
+	char name[16];
+	uint32_t lcd_id;
+};
+//ASUS_BSP: Austin --
+
 enum fps_resolution {
 	FPS_RESOLUTION_DEFAULT,
 	FPS_RESOLUTION_HZ,

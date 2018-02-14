@@ -24,6 +24,7 @@
 #include "msm_camera_dt_util.h"
 #include "cam_hw_ops.h"
 
+DEFINE_MSM_MUTEX(msm_cci_mutex); //ASUS_BSP PJ_Ma+++
 #define V4L2_IDENT_CCI 50005
 #define CCI_I2C_QUEUE_0_SIZE 64
 #define CCI_I2C_Q0_SIZE_128W 128
@@ -1652,6 +1653,7 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	struct msm_camera_cci_ctrl *cci_ctrl)
 {
 	int32_t rc = 0;
+	mutex_lock(&msm_cci_mutex); //ASUS_BSP PJ_Ma+++
 	CDBG("%s line %d cmd %d\n", __func__, __LINE__,
 		cci_ctrl->cmd);
 	switch (cci_ctrl->cmd) {
@@ -1680,6 +1682,7 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	default:
 		rc = -ENOIOCTLCMD;
 	}
+	mutex_unlock(&msm_cci_mutex); //ASUS_BSP PJ_Ma+++
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);
 	cci_ctrl->status = rc;
 	return rc;

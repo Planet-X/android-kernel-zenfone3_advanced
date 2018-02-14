@@ -17,7 +17,12 @@
 #include <linux/of_gpio.h>
 #include "msm_flash.h"
 #include "msm_camera_dt_util.h"
+#include "msm_camera_io_util.h"
 #include "msm_cci.h"
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/power_supply.h>
 
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
@@ -25,6 +30,23 @@
 DEFINE_MSM_MUTEX(msm_flash_mutex);
 
 static struct v4l2_file_operations msm_flash_v4l2_subdev_fops;
+//ASUS_BSP +++ PJ "modify torch light brightness set node for control dual flash"
+//static struct led_trigger *torch_trigger[MAX_LED_TRIGGERS];
+//static struct led_trigger *switch_trigger;
+//ASUS_BSP --- PJ "modify torch light brightness set node for control dual flash"
+//ASUS_BSP +++ PJ "implement asus_flash control node"
+struct msm_flash_ctrl_t *g_flash_ctrl;
+#define DBG_TXT_BUF_SIZE 256
+static char debugTxtBuf[DBG_TXT_BUF_SIZE];
+//ASUS_BSP --- PJ "implement asus_flash control node"
+static int ATD_status; //ASUS_BSP PJ "add flash status"
+//ASUS_BSP PJ_Ma +++
+#define MAX_OTG_TORCH_CURRENT 50
+#define MAX_TORCH_CURRENT 200
+#define MAX_FRONT_FLASH_CURRENT 200
+#define MAX_FLASH_CURRENT 900
+#define MAX_FLASH_DURATION 800
+//ASUS_BSP PJ_Ma ---
 static struct led_trigger *torch_trigger;
 
 static const struct of_device_id msm_flash_dt_match[] = {
@@ -119,7 +141,21 @@ static int32_t msm_torch_create_classdev(struct platform_device *pdev,
 
 	return 0;
 };
+//ASUS_BSP PJ_Ma+++
+static bool msm_flash_is_otg_present(void)
+{
+	union power_supply_propval prop = {0,};
+	static struct power_supply	*usb_psy =NULL;
 
+	if (!usb_psy)
+		usb_psy = power_supply_get_by_name("usb");
+
+	if (usb_psy)
+		usb_psy->get_property(usb_psy,
+				POWER_SUPPLY_PROP_USB_OTG, &prop);
+	return prop.intval != 0;
+}
+//ASUS_BSP PJ_Ma---
 static int32_t msm_flash_get_subdev_id(
 	struct msm_flash_ctrl_t *flash_ctrl, void *arg)
 {
@@ -384,8 +420,10 @@ static int32_t msm_flash_off(struct msm_flash_ctrl_t *flash_ctrl,
 	struct msm_flash_cfg_data_t *flash_data)
 {
 	int32_t i = 0;
+	struct msm_camera_power_ctrl_t *power_info = NULL;
 
 	CDBG("Enter\n");
+	power_info = &flash_ctrl->power_info;
 
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++)
 		if (flash_ctrl->flash_trigger[i])
@@ -396,6 +434,19 @@ static int32_t msm_flash_off(struct msm_flash_ctrl_t *flash_ctrl,
 			led_trigger_event(flash_ctrl->torch_trigger[i], 0);
 	if (flash_ctrl->switch_trigger)
 		led_trigger_event(flash_ctrl->switch_trigger, 0);
+	usleep_range(6000,7000);
+	if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+		//ASUS_BSP +++ PJ "modify FLED1_REAR_EN_5 to high for prevent pmi8950_torch0 open circuit fault"
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_HIGH);
+		//ASUS_BSP --- PJ "modify FLED1_REAR_EN_5 to high for prevent pmi8950_torch0 open circuit fault"
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_NOW],
+			GPIO_OUT_LOW);
+	}
 
 	CDBG("Exit\n");
 	return 0;
@@ -444,13 +495,34 @@ static int32_t msm_flash_init(
 	uint32_t i = 0;
 	int32_t rc = -EFAULT;
 	enum msm_flash_driver_type flash_driver_type = FLASH_DRIVER_DEFAULT;
+	struct msm_camera_power_ctrl_t *power_info = NULL;
 
 	CDBG("Enter");
+	power_info = &flash_ctrl->power_info;
 
 	if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
 		pr_err("%s:%d Invalid flash state = %d",
 			__func__, __LINE__, flash_ctrl->flash_state);
 		return 0;
+	}
+	if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+		rc = msm_camera_request_gpio_table(
+			power_info->gpio_conf->cam_gpio_req_tbl,
+			power_info->gpio_conf->cam_gpio_req_tbl_size, 1);
+		if (rc < 0) {
+			pr_err("%s:%d request gpio failed\n", __func__, __LINE__);
+			return rc;
+		}
+
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_EN],
+			GPIO_OUT_LOW);
+
+		gpio_set_value_cansleep(
+			power_info->gpio_conf->gpio_num_info->
+			gpio_num[SENSOR_GPIO_FL_NOW],
+			GPIO_OUT_LOW);
 	}
 
 	if (flash_data->cfg.flash_init_info->flash_driver_type ==
@@ -572,6 +644,13 @@ static int32_t msm_flash_low(
 {
 	uint32_t curr = 0, max_current = 0;
 	int32_t i = 0;
+	struct msm_camera_power_ctrl_t *power_info = NULL;
+	//ASUS_BSP PJ_Ma+++
+	bool otg_flag = msm_flash_is_otg_present();
+	int32_t now_current0 = 0, now_current1 = 0;
+	//ASUS_BSP PJ_Ma---
+
+	power_info = &flash_ctrl->power_info;
 
 	CDBG("Enter\n");
 	/* Turn off flash triggers */
@@ -579,12 +658,212 @@ static int32_t msm_flash_low(
 		if (flash_ctrl->flash_trigger[i])
 			led_trigger_event(flash_ctrl->flash_trigger[i], 0);
 
+	pr_err("%s:%d ctrl_state %d is_otg_present %d\n", __func__, __LINE__, flash_data->ctrl_state, otg_flag);
+	//ASUS_BSP +++ PJ "add ctrl state for mapping to truth table"
+	now_current0 = flash_data->flash_current[0];
+	now_current1 = flash_data->flash_current[1];
+	switch (flash_data->ctrl_state) {
+	case CTRL_FRONT_LED1_ON_REAR_LED_OFF_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = (((now_current0 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = (((now_current1 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else {
+			if (!otg_flag) {
+				//flash_data->flash_current[0] = MAX_FRONT_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_HIGH);
+		}
+		break;
+	case CTRL_FRONT_LED1_ON_REAR_LED_OFF_OFF:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = (((now_current0 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else if (now_current0 < 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		flash_data->flash_current[1] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_HIGH);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_OFF_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[1] = (((now_current1 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else if (now_current1 < 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[1] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		flash_data->flash_current[0] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_ON_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = (((now_current0 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = (((now_current1 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_ON_OFF:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = (((now_current0 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else if (now_current0 < 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		flash_data->flash_current[1] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	default:
+		pr_err("%s:%d now is default ctrl state\n", __func__, __LINE__);
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = (((now_current0 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = (((now_current1 * 100) / MAX_TORCH_CURRENT) * MAX_OTG_TORCH_CURRENT) / 100;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		} else {
+			if (!otg_flag) {
+				flash_ctrl->torch_max_current[0] = MAX_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_TORCH_CURRENT;
+			} else {
+				flash_data->flash_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[0] = MAX_OTG_TORCH_CURRENT;
+				flash_data->flash_current[1] = MAX_OTG_TORCH_CURRENT;
+				flash_ctrl->torch_max_current[1] = MAX_OTG_TORCH_CURRENT;
+			}
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	}
+	pr_err("%s:%d remapping current0 %d current1 %d old current0 %d current1 %d\n",
+		__func__, __LINE__, flash_data->flash_current[0], flash_data->flash_current[1], now_current0, now_current1);
+	//ASUS_BSP --- PJ "add ctrl state for mapping to truth table"
 	/* Turn on flash triggers */
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++) {
 		if (flash_ctrl->torch_trigger[i]) {
 			max_current = flash_ctrl->torch_max_current[i];
 			if (flash_data->flash_current[i] >= 0 &&
-				flash_data->flash_current[i] <
+				flash_data->flash_current[i] <=
 				max_current) {
 				curr = flash_data->flash_current[i];
 			} else {
@@ -599,6 +878,7 @@ static int32_t msm_flash_low(
 	}
 	if (flash_ctrl->switch_trigger)
 		led_trigger_event(flash_ctrl->switch_trigger, 1);
+	usleep_range(6000,7000);
 	CDBG("Exit\n");
 	return 0;
 }
@@ -610,18 +890,148 @@ static int32_t msm_flash_high(
 	int32_t curr = 0;
 	int32_t max_current = 0;
 	int32_t i = 0;
+	struct msm_camera_power_ctrl_t *power_info = NULL;
+	//ASUS_BSP PJ_Ma+++
+	//bool otg_flag = msm_flash_is_otg_present();
+	int32_t now_current0 = 0, now_current1 = 0;
+	//ASUS_BSP PJ_Ma---
+
+	power_info = &flash_ctrl->power_info;
 
 	/* Turn off torch triggers */
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++)
 		if (flash_ctrl->torch_trigger[i])
 			led_trigger_event(flash_ctrl->torch_trigger[i], 0);
 
+	pr_err("%s:%d ctrl_state %d\n", __func__, __LINE__, flash_data->ctrl_state);
+	//ASUS_BSP +++ PJ "add ctrl state for mapping to truth table"
+	now_current0 = flash_data->flash_current[0];
+	now_current1 = flash_data->flash_current[1];
+	switch (flash_data->ctrl_state) {
+	case CTRL_FRONT_LED1_ON_REAR_LED_OFF_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_data->flash_current[0] = (((now_current0 * 100) / MAX_FLASH_CURRENT) * MAX_FRONT_FLASH_CURRENT) / 100;
+			flash_ctrl->flash_max_current[0] = MAX_FRONT_FLASH_CURRENT;
+			flash_data->flash_current[1] = (((now_current1 * 100) / MAX_FLASH_CURRENT) * MAX_FRONT_FLASH_CURRENT) / 100;
+			flash_ctrl->flash_max_current[1] = MAX_FRONT_FLASH_CURRENT;
+		} else {
+			flash_data->flash_current[0] = MAX_FRONT_FLASH_CURRENT;
+			flash_ctrl->flash_max_current[0] = MAX_FRONT_FLASH_CURRENT;
+			flash_data->flash_current[1] = MAX_FRONT_FLASH_CURRENT;
+			flash_ctrl->flash_max_current[1] = MAX_FRONT_FLASH_CURRENT;
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_HIGH);
+		}
+		break;
+	case CTRL_FRONT_LED1_ON_REAR_LED_OFF_OFF:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_data->flash_current[0] = (((now_current0 * 100) / MAX_FLASH_CURRENT) * MAX_FRONT_FLASH_CURRENT) / 100;
+			flash_ctrl->flash_max_current[0] = MAX_FRONT_FLASH_CURRENT;
+		} else if (now_current0 < 0) {
+			flash_data->flash_current[0] = MAX_FRONT_FLASH_CURRENT;
+			flash_ctrl->flash_max_current[0] = MAX_FRONT_FLASH_CURRENT;
+		}
+		flash_data->flash_current[1] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_HIGH);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_OFF_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_ctrl->flash_max_current[1] = MAX_FLASH_CURRENT;
+		}
+		flash_data->flash_current[0] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_LOW);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_ON_ON:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_ctrl->flash_max_current[0] = MAX_FLASH_CURRENT;
+			flash_ctrl->flash_max_current[1] = MAX_FLASH_CURRENT;
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	case CTRL_FRONT_LED1_OFF_REAR_LED_ON_OFF:
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_ctrl->flash_max_current[0] = MAX_FLASH_CURRENT;
+		}
+		flash_data->flash_current[1] = 0;
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	default:
+		pr_err("%s:%d now is default ctrl state\n", __func__, __LINE__);
+		if (now_current0 >= 0 && now_current1 >= 0) {
+			flash_ctrl->flash_max_current[0] = MAX_FLASH_CURRENT;
+			flash_ctrl->flash_max_current[1] = MAX_FLASH_CURRENT;
+		}
+		if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_EN],
+				GPIO_OUT_HIGH);
+
+			gpio_set_value_cansleep(
+				power_info->gpio_conf->gpio_num_info->
+				gpio_num[SENSOR_GPIO_FL_NOW],
+				GPIO_OUT_LOW);
+		}
+		break;
+	}
+	pr_err("%s:%d remapping current0 %d current1 %d old current0 %d current1 %d\n",
+		__func__, __LINE__, flash_data->flash_current[0], flash_data->flash_current[1], now_current0, now_current1);
+	//ASUS_BSP --- PJ "add ctrl state for mapping to truth table"
 	/* Turn on flash triggers */
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++) {
 		if (flash_ctrl->flash_trigger[i]) {
 			max_current = flash_ctrl->flash_max_current[i];
 			if (flash_data->flash_current[i] >= 0 &&
-				flash_data->flash_current[i] <
+				flash_data->flash_current[i] <=
 				max_current) {
 				curr = flash_data->flash_current[i];
 			} else {
@@ -636,6 +1046,7 @@ static int32_t msm_flash_high(
 	}
 	if (flash_ctrl->switch_trigger)
 		led_trigger_event(flash_ctrl->switch_trigger, 1);
+	usleep_range(6000,7000);
 	return 0;
 }
 
@@ -643,12 +1054,34 @@ static int32_t msm_flash_release(
 	struct msm_flash_ctrl_t *flash_ctrl)
 {
 	int32_t rc = 0;
+	struct msm_camera_power_ctrl_t *power_info = NULL;
+
+	CDBG("Enter");
+	power_info = &flash_ctrl->power_info;
 
 	rc = flash_ctrl->func_tbl->camera_flash_off(flash_ctrl, NULL);
 	if (rc < 0) {
 		pr_err("%s:%d camera_flash_init failed rc = %d",
 			__func__, __LINE__, rc);
 		return rc;
+	}
+	if (g_ASUS_hwID < ZE552KL_PR || (g_ASUS_hwID >= ZE520KL_EVB&&g_ASUS_hwID < ZE520KL_PR)) {
+	/*gpio_set_value_cansleep(
+		power_info->gpio_conf->gpio_num_info->
+		gpio_num[SENSOR_GPIO_FL_EN],
+		GPIO_OUT_LOW);
+
+	gpio_set_value_cansleep(
+		power_info->gpio_conf->gpio_num_info->
+		gpio_num[SENSOR_GPIO_FL_NOW],
+		GPIO_OUT_LOW);*/
+		rc = msm_camera_request_gpio_table(
+			power_info->gpio_conf->cam_gpio_req_tbl,
+			power_info->gpio_conf->cam_gpio_req_tbl_size, 0);
+		if (rc < 0) {
+			pr_err("%s:%d request gpio failed\n", __func__, __LINE__);
+			return rc;
+		}
 	}
 	flash_ctrl->flash_state = MSM_CAMERA_FLASH_RELEASE;
 	return 0;
@@ -1053,6 +1486,7 @@ static long msm_flash_subdev_do_ioctl(
 	switch (cmd) {
 	case VIDIOC_MSM_FLASH_CFG32:
 		flash_data.cfg_type = u32->cfg_type;
+	flash_data.ctrl_state = u32->ctrl_state; //ASUS_BSP PJ_Ma+++
 		for (i = 0; i < MAX_LED_TRIGGERS; i++) {
 			flash_data.flash_current[i] = u32->flash_current[i];
 			flash_data.flash_duration[i] = u32->flash_duration[i];
@@ -1111,6 +1545,483 @@ static long msm_flash_subdev_fops_ioctl(struct file *file,
 	return video_usercopy(file, cmd, arg, msm_flash_subdev_do_ioctl);
 }
 #endif
+//ASUS_BSP +++ Deka "implement Zenflash control node"
+#define	ZENFLASH_PROC_FILE	"driver/asus_flash_trigger_time"
+#define MAX_ZENFLASH_CURRENT 800
+static struct proc_dir_entry *zenflash_proc_file;
+
+static int zenflash_proc_read(struct seq_file *buf, void *v)
+{
+    return 0;
+}
+
+static int zenflash_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, zenflash_proc_read, NULL);
+}
+
+static ssize_t zenflash_proc_write(struct file *filp, const char __user *buf, size_t count, loff_t *ppos)
+{
+	int now_duration_value = -1;
+	int rc = 0, len, i;
+	struct msm_flash_ctrl_t *flash_ctrl = g_flash_ctrl;
+	struct msm_flash_cfg_data_t flash_data;
+	struct msm_flash_init_info_t flash_init_info;
+
+	len=(count > DBG_TXT_BUF_SIZE-1)?(DBG_TXT_BUF_SIZE-1):(count);
+	if (copy_from_user(debugTxtBuf,buf,len))
+			return -EFAULT;
+	debugTxtBuf[len]=0; //add string end
+	sscanf(debugTxtBuf, "%d", &now_duration_value);
+
+	*ppos=len;
+	
+
+	mutex_lock(flash_ctrl->flash_mutex);
+	if (now_duration_value<0 ||now_duration_value>80) {
+		pr_err("[Zenflash] now_duration_value = %d set to 80\n",now_duration_value);
+              now_duration_value = 80;
+	}
+
+	flash_data.ctrl_state = CTRL_FRONT_LED1_OFF_REAR_LED_OFF_ON;
+	flash_data.cfg.flash_init_info = &flash_init_info;
+	flash_init_info.flash_driver_type = flash_ctrl->flash_driver_type;
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		flash_data.flash_current[i] = MAX_ZENFLASH_CURRENT;
+		flash_data.flash_duration[i] = MAX_FLASH_DURATION;
+	}
+	pr_err("[Zenflash]flash duration value=%d current %d \n", now_duration_value,MAX_ZENFLASH_CURRENT);
+
+	if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+		rc = msm_flash_high(flash_ctrl, &flash_data);
+		if (rc < 0) {
+			pr_err("%s:%d camera_flash_high failed rc = %d",
+				__func__, __LINE__, rc);
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return rc;
+		}
+              usleep_range(now_duration_value*1000,now_duration_value*1001);
+              rc = msm_flash_off(flash_ctrl, &flash_data);
+		if (rc < 0) {
+			pr_err("%s:%d camera_flash_off failed rc = %d",
+				__func__, __LINE__, rc);
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return rc;
+		}
+        
+	}
+	mutex_unlock(flash_ctrl->flash_mutex);
+	return len;
+}
+
+static const struct file_operations zenflash_fops = {
+	.owner = THIS_MODULE,
+	.open = zenflash_proc_open,
+	.read = seq_read,
+	.write = zenflash_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+//ASUS_BSP --- Deka "implement Zenflash control node"
+//ASUS_BSP +++ PJ "implement asus_flash_brightness control node"
+#define	FLASH_BRIGHTNESS_PROC_FILE	"driver/asus_flash_brightness"
+static struct proc_dir_entry *flash_brightness_proc_file;
+static int last_flash_brightness_value;
+
+static int msm_flash_brightness_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%d\n", last_flash_brightness_value);
+    return 0;
+}
+
+static int msm_flash_brightness_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, msm_flash_brightness_proc_read, NULL);
+}
+
+static ssize_t msm_flash_brightness_proc_write(struct file *filp, const char __user *buf, size_t count, loff_t *ppos)
+{
+	int set_val = -1,now_flash_brightness_value = -1;
+	int MAX_FLASHLIGHT_CURRENT = 135;
+	int rc = 0, len, i;
+	struct msm_flash_ctrl_t *flash_ctrl = g_flash_ctrl;
+	struct msm_flash_cfg_data_t flash_data;
+	struct msm_flash_init_info_t flash_init_info;
+
+	len=(count > DBG_TXT_BUF_SIZE-1)?(DBG_TXT_BUF_SIZE-1):(count);
+	if (copy_from_user(debugTxtBuf,buf,len))
+			return -EFAULT;
+	debugTxtBuf[len]=0; //add string end
+	sscanf(debugTxtBuf, "%d", &now_flash_brightness_value);
+	set_val = now_flash_brightness_value * MAX_FLASHLIGHT_CURRENT / 99;
+	*ppos=len;
+	pr_err("[AsusFlashBrightness]flash brightness value=%d now_flash_brightness_value=%d\n", set_val,now_flash_brightness_value);
+
+	mutex_lock(flash_ctrl->flash_mutex);
+	if (last_flash_brightness_value == now_flash_brightness_value||(now_flash_brightness_value<0||now_flash_brightness_value>99)) {
+		pr_err("[AsusFlashBrightness] now_flash_brightness_value = last_flash_brightness_value or now_flash_brightness_value out of range so donothing\n");
+		mutex_unlock(flash_ctrl->flash_mutex);
+		return len;
+	}
+	last_flash_brightness_value = now_flash_brightness_value;
+	flash_data.ctrl_state = CTRL_FRONT_LED1_OFF_REAR_LED_OFF_ON;
+	flash_data.cfg.flash_init_info = &flash_init_info;
+	flash_init_info.flash_driver_type = flash_ctrl->flash_driver_type;
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		flash_data.flash_current[i] = flash_ctrl->flash_max_current[i];
+		flash_data.flash_duration[i] = 1280;
+	}
+	if(flash_ctrl->flashlight_state != MSM_CAMERA_FLASH_INIT ) {
+		rc = msm_flash_init(flash_ctrl, &flash_data);
+		if (rc < 0) {
+			pr_err("%s:%d camera_flash_init failed rc = %d",
+				__func__, __LINE__, rc);
+				rc = msm_flash_release(flash_ctrl);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_release failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return rc;
+		}
+              flash_ctrl->flashlight_state = MSM_CAMERA_FLASH_INIT;
+	}
+
+	if (set_val > MAX_FLASHLIGHT_CURRENT) {
+		flash_data.flash_current[0] = MAX_FLASHLIGHT_CURRENT;
+		flash_data.flash_current[1] = MAX_FLASHLIGHT_CURRENT;
+		if(flash_ctrl->flashlight_state == MSM_CAMERA_FLASH_INIT) {
+			/*rc = msm_flash_off(flash_ctrl, &flash_data);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_off failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}*/
+			rc = msm_flash_low(flash_ctrl, &flash_data);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_low failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}
+		}
+	} else if (set_val <= 0) {
+		if(flash_ctrl->flashlight_state == MSM_CAMERA_FLASH_INIT) {
+			rc = msm_flash_off(flash_ctrl, NULL);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_off failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}
+			rc = msm_flash_release(flash_ctrl);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_release failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}
+                    flash_ctrl->flashlight_state = MSM_CAMERA_FLASH_RELEASE;
+		}
+	} else if (0 < set_val && set_val < (MAX_FLASHLIGHT_CURRENT + 1)) {
+		pr_err(KERN_INFO "[AsusFlashBrightness] current now in 1~%d", MAX_FLASHLIGHT_CURRENT);
+			flash_data.flash_current[0] = set_val;
+			flash_data.flash_current[1] = set_val;
+			if(flash_ctrl->flashlight_state == MSM_CAMERA_FLASH_INIT) {
+				/*rc = msm_flash_off(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}*/
+				rc = msm_flash_low(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_low failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+			}
+	} else {
+		if(flash_ctrl->flashlight_state == MSM_CAMERA_FLASH_INIT)
+			rc = msm_flash_release(flash_ctrl);
+		if (rc < 0) {
+			pr_err("%s:%d camera_flash_release failed rc = %d",
+				__func__, __LINE__, rc);
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return rc;
+		}
+              flash_ctrl->flashlight_state = MSM_CAMERA_FLASH_RELEASE;
+		mutex_unlock(flash_ctrl->flash_mutex);
+		return -1;
+	}
+	mutex_unlock(flash_ctrl->flash_mutex);
+	return len;
+}
+
+static const struct file_operations flash_brightness_fops = {
+	.owner = THIS_MODULE,
+	.open = msm_flash_brightness_proc_open,
+	.read = seq_read,
+	.write = msm_flash_brightness_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+//ASUS_BSP --- PJ "implement asus_flash_brightness control node"
+
+//ASUS_BSP +++ PJ "implement asus_flash control node"
+#define	ASUS_FLASH_PROC_FILE	"driver/asus_flash"
+static struct proc_dir_entry *asus_flash_proc_file;
+
+static int asus_flash_read(struct seq_file *buf, void *v)
+{
+	seq_printf(buf, "%d\n", ATD_status);//ASUS_BSP PJ "add flash status"
+	ATD_status = 0;//ASUS_BSP PJ "add flash status"
+	return 0;
+}
+
+static int asus_flash_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, asus_flash_read, NULL);
+}
+
+static ssize_t asus_flash_write(struct file *dev, const char *buf, size_t count, loff_t *ppos)
+{
+	int mode = -1, set_val = -1, set_val2 = -1;
+	int rc = 0, len, i;
+	struct msm_flash_ctrl_t *flash_ctrl = g_flash_ctrl;
+	struct msm_flash_cfg_data_t flash_data;
+	struct msm_flash_init_info_t flash_init_info;
+
+	len=(count > DBG_TXT_BUF_SIZE-1)?(DBG_TXT_BUF_SIZE-1):(count);
+	if (copy_from_user(debugTxtBuf,buf,len))
+			return -EFAULT;
+	debugTxtBuf[len]=0; //add string end
+	sscanf(debugTxtBuf, "%d %d %d", &mode, &set_val, &set_val2);
+	*ppos=len;
+
+	pr_err("[AsusFlash]flash mode=%d value=%d value2=%d\n", mode, set_val, set_val2);
+	mutex_lock(flash_ctrl->flash_mutex);
+	flash_data.ctrl_state = set_val2;
+	flash_data.cfg.flash_init_info = &flash_init_info;
+	flash_init_info.flash_driver_type = flash_ctrl->flash_driver_type;
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		flash_data.flash_current[i] = flash_ctrl->flash_max_current[i];
+		flash_data.flash_duration[i] = MAX_FLASH_DURATION;
+	}
+	if(flash_ctrl->flash_state != MSM_CAMERA_FLASH_INIT ) {
+		rc = msm_flash_init(flash_ctrl, &flash_data);
+		if (rc < 0) {
+			pr_err("%s:%d camera_flash_init failed rc = %d",
+				__func__, __LINE__, rc);
+				rc = msm_flash_release(flash_ctrl);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_release failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return rc;
+		}
+	} 
+
+	if(mode == 0) {
+		if (set_val < 0 || set_val > 200 || set_val == 1) {
+			flash_data.flash_current[0] = 100;
+			flash_data.flash_current[1] = 100;
+
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_low(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_low failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else if (set_val == 0 ) {
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, NULL);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_release(flash_ctrl);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_release failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else if(0 < set_val && set_val <= 200) {
+			pr_err(KERN_INFO "[AsusFlash] current now in 1~200");
+			flash_data.flash_current[0] = set_val;
+			flash_data.flash_current[1] = set_val;
+
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_low(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_low failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else {
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+				rc = msm_flash_release(flash_ctrl);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_release failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return -1;
+		}
+	} else if(mode == 1) {
+		if (set_val == 1 || set_val < 0 || set_val > 1000) {
+			flash_data.flash_current[0] = 625;
+			flash_data.flash_current[1] = 625;
+
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_high(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_high failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else if (set_val == 0) {
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, NULL);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_release(flash_ctrl);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_release failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else if (0 < set_val && set_val <= 1000) {
+			pr_err(KERN_INFO "[AsusFlash] Flash current now in 1~1000");
+			flash_data.flash_current[0] = set_val;
+			flash_data.flash_current[1] = set_val;
+
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT) {
+				rc = msm_flash_off(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_off failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				rc = msm_flash_high(flash_ctrl, &flash_data);
+				if (rc < 0) {
+					pr_err("%s:%d camera_flash_high failed rc = %d",
+						__func__, __LINE__, rc);
+					mutex_unlock(flash_ctrl->flash_mutex);
+					return rc;
+				}
+				ATD_status = 1;//ASUS_BSP PJ "add flash status"
+			}
+		} else {
+			if(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+				rc = msm_flash_release(flash_ctrl);
+			if (rc < 0) {
+				pr_err("%s:%d camera_flash_release failed rc = %d",
+					__func__, __LINE__, rc);
+				mutex_unlock(flash_ctrl->flash_mutex);
+				return rc;
+			}
+			mutex_unlock(flash_ctrl->flash_mutex);
+			return -1;
+		}
+	} else {
+		mutex_unlock(flash_ctrl->flash_mutex);
+		return -1;
+	}
+	mutex_unlock(flash_ctrl->flash_mutex);
+	return len;
+}
+
+static const struct file_operations asus_flash_proc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= asus_flash_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+	.write		= asus_flash_write,
+};
+//ASUS_BSP --- PJ "implement asus_flash control node"
+
+//ASUS_BSP +++ PJ "create flash control node"
+static void create_proc_file(void)
+{
+    asus_flash_proc_file = proc_create(ASUS_FLASH_PROC_FILE, 0666, NULL, &asus_flash_proc_fops);
+    if (asus_flash_proc_file) {
+    	pr_err("%s asus_flash_proc_file sucessed!\n", __func__);
+    } else {
+    	pr_err("%s asus_flash_proc_file failed!\n", __func__);
+    }
+    flash_brightness_proc_file = proc_create(FLASH_BRIGHTNESS_PROC_FILE, 0666, NULL, &flash_brightness_fops);
+    if (flash_brightness_proc_file) {
+    	pr_err("%s flash_brightness_proc_file sucessed!\n", __func__);
+    } else {
+    	pr_err("%s flash_brightness_proc_file failed!\n", __func__);
+    }
+    //ASUS_BSP +++ Deka "implement Zenflash control node"
+    zenflash_proc_file = proc_create(ZENFLASH_PROC_FILE, 0666, NULL, &zenflash_fops);
+    if (zenflash_proc_file) {
+    	pr_err("%s zenflash_proc_file sucessed!\n", __func__);
+    } else {
+    	pr_err("%s zenflash_proc_file failed!\n", __func__);
+    }
+    //ASUS_BSP --- Deka "implement Zenflash control node"
+    
+}
+//ASUS_BSP --- PJ "create flash control node"
 static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0;
@@ -1185,6 +2096,12 @@ static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 	if (flash_ctrl->flash_driver_type == FLASH_DRIVER_PMIC)
 		rc = msm_torch_create_classdev(pdev, flash_ctrl);
 
+	//ASUS_BSP +++ PJ "create flash control node"
+	flash_ctrl->ref_count = 0;
+	g_flash_ctrl = flash_ctrl;
+	create_proc_file();
+	//ASUS_BSP --- PJ "create flash control node"
+	ATD_status = 0;//ASUS_BSP PJ "add flash status"
 	CDBG("probe success\n");
 	return rc;
 }

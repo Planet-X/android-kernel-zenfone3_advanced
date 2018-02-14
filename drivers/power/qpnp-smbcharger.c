@@ -39,6 +39,14 @@
 #include <linux/msm_bcl.h>
 #include <linux/ktime.h>
 #include <linux/pmic-voter.h>
+#include <linux/proc_fs.h>
+#include <linux/alarmtimer.h>
+#include <linux/wakelock.h>
+#include "charger_thermal.c"	//Austin_Tseng
+#include <linux/unistd.h>
+#include <linux/fcntl.h>
+#include <linux/switch.h>
+#include <linux/uaccess.h>
 
 /* Mask/Bit helpers */
 #define _SMB_MASK(BITS, POS) \
@@ -82,6 +90,50 @@ struct ilim_map {
 	struct ilim_entry	*entries;
 };
 
+//ASUS BSP Austin_T : global gpio_control +++
+static struct gpio_control *global_gpio;
+
+struct gpio_control {
+	u32 ADCPWREN;
+	u32 DPM_SW_EN;
+	u32 ADC_VDD_EN;
+	u32 USBID_CTRL;
+	u32 USB_TEMP_ALERT;
+};
+//ASUS BSP Austin_T : global gpio_control ---
+static unsigned long old_VWC_time; 			//ASUS BSP Austin_T : ASYSEvtlog very weak charger time
+static unsigned long probe_start_time;		//ASUS BSP Austin_T : Adapter detect timer +++
+static struct smbchg_chip *smbchg_dev;		//ASUS BSP Austin_T : global chip
+bool factory_build_flag = 0;				//ASUS BSP Austin_T : FactoryBuild flag
+bool BR_countrycode_flag = 0;
+int BR_read_count = 0;
+bool boot_completed_flag = 0;
+bool special_connector_flag = 0;
+bool demo_app_property_flag = 0;
+bool usb_alert_flag = 0;
+bool en_charging_limit = 0;
+int Thermal_Level = 0; 						//Thermal Level control for usb_in current
+static unsigned long thermal_engine_time;
+static int Thermal_Level_old = 0;
+bool call_from_thermal_engine = 0;
+int AIN2_Value = 0;
+bool battery_dc_property = 0;
+bool stop_thermal_flag = 0;
+//bool boot_sdp_rerun_apsd_flag = 0;
+
+//ASUS BSP Austin_T : Add for ASUSEvtlog "enable_voters"
+/*static char *AEvtlog_enable_voters[] = {
+	"USER_EN_VOTER",
+	"POWER_SUPPLY_EN_VOTER",
+	"USB_EN_VOTER",
+	"WIRELESS_EN_VOTER",
+	"THERMAL_EN_VOTER",
+	"OTG_EN_VOTER",
+	"WEAK_CHARGER_EN_VOTER",
+	"FAKE_BATTERY_EN_VOTER",
+	"NUM_EN_VOTERS"
+};*/
+
 struct smbchg_version_tables {
 	const int			*dc_ilim_ma_table;
 	int				dc_ilim_ma_len;
@@ -118,6 +170,7 @@ struct smbchg_chip {
 	int				typec_current_ma;
 	int				dc_max_current_ma;
 	int				dc_target_current_ma;
+	int 				usb_target_current_ma;	//Austin_T
 	int				cfg_fastchg_current_ma;
 	int				fastchg_current_ma;
 	int				vfloat_mv;
@@ -285,6 +338,31 @@ struct smbchg_chip {
 	struct votable			*hw_aicl_rerun_enable_indirect_votable;
 	struct votable			*aicl_deglitch_short_votable;
 	struct votable			*hvdcp_enable_votable;
+
+	bool 	enable_9V;			//Disable 9V
+	int 	CHG_TYPE_flag;		//CHG_TYPE
+	bool 	RE_APSD_flag;		//Set ads ready flag
+	bool    EXT_RE_APSD_flag;
+};
+
+enum CHG_TYPE {
+	NONE = 0,
+	OTHERS,
+	SDP,
+	CDP,
+	DCP_1A,
+	DCP_2A,
+	PB_2A,
+	RESERVE_390_1A,
+	RESERVE_100_1A,
+	ASUS_750K,
+	ASUS_200K,
+	UNDEFINED,
+	FLOATING,
+	ADC_NOT_READY_1A,
+	TYPEC_1P5A,
+	TYPEC_3P0A,
+	ELSE,
 };
 
 enum qpnp_schg {
@@ -334,6 +412,9 @@ enum wake_reason {
 	PM_ESR_PULSE = BIT(2),
 	PM_PARALLEL_TAPER = BIT(3),
 	PM_DETECT_HVDCP = BIT(4),
+	PM_ADAPTER_JUDGE = BIT(5),
+	PM_ADC_JUDGE = BIT(6),
+	PM_RE_APSD_RESET = BIT(7),
 };
 
 /* fcc_voters */
@@ -439,19 +520,19 @@ module_param_named(
 	int, S_IRUSR | S_IWUSR
 );
 
-static int smbchg_default_hvdcp_icl_ma = 1800;
+static int smbchg_default_hvdcp_icl_ma = 900;
 module_param_named(
 	default_hvdcp_icl_ma, smbchg_default_hvdcp_icl_ma,
 	int, S_IRUSR | S_IWUSR
 );
 
-static int smbchg_default_hvdcp3_icl_ma = 3000;
+static int smbchg_default_hvdcp3_icl_ma = 900;
 module_param_named(
 	default_hvdcp3_icl_ma, smbchg_default_hvdcp3_icl_ma,
 	int, S_IRUSR | S_IWUSR
 );
 
-static int smbchg_default_dcp_icl_ma = 1800;
+static int smbchg_default_dcp_icl_ma = 900;
 module_param_named(
 	default_dcp_icl_ma, smbchg_default_dcp_icl_ma,
 	int, S_IRUSR | S_IWUSR
@@ -491,6 +572,35 @@ module_param_named(
 		else							\
 			pr_debug_ratelimited(fmt, ##__VA_ARGS__);	\
 	} while (0)
+
+//Austin_T +++
+static struct delayed_work jeita_work;
+static struct delayed_work adapter_detect_work;
+static struct delayed_work asus_adapter_adc_work;
+static struct delayed_work SetBatRTCWorker;
+static struct delayed_work Set_COS_APSD_work;
+static struct delayed_work boot_SDP_rerun_apsd_work;
+static struct delayed_work read_countrycode_work;
+static struct delayed_work USB_alert_work;
+
+int judge_PRT8301_temp(void);
+static int rerun_apsd(struct smbchg_chip *chip);
+static int get_prop_batt_capacity(struct smbchg_chip *chip);
+static inline void uartlog_dump_reg(struct smbchg_chip *chip, u16 addr,	const char *name);
+static void uartlog_dump_regs(struct smbchg_chip *chip);
+void smbchg_jeita_start_work(struct smbchg_chip *chip, int time);
+extern int typec_CHG_TYPE_current(void);
+extern bool g_Charger_mode;		//ASUS_BSP Austin_T : add charger mode trigger
+extern bool g_usb_alert_mode;	//ASUS_BSP Austin_T : add usb alert mode trigger
+bool COS_APSD = 0;
+void thermal_level_control(struct smbchg_chip *chip);
+static bool is_smbchg_charging(struct smbchg_chip *chip);
+
+DEFINE_MUTEX(jeita_work_lock);
+DEFINE_MUTEX(thermal_work_lock);
+//Austin_T ---
+
+extern void focal_usb_detection(bool plugin);		//ASUS BSP Nancy : notify touch cable in +++
 
 static int smbchg_read(struct smbchg_chip *chip, u8 *val,
 			u16 addr, int count)
@@ -909,6 +1019,18 @@ static void read_usb_type(struct smbchg_chip *chip, char **usb_type_name,
 	*usb_supply_type = get_usb_supply_type(type);
 }
 
+char *fg_to_get_usb_type(void)
+{
+	enum power_supply_type usb_supply_type;
+	char *usb_type_name = "NONE";
+
+	if (smbchg_dev == NULL)
+		return "NON-RDY";
+	read_usb_type(smbchg_dev, &usb_type_name, &usb_supply_type);
+	return usb_type_name;
+}
+EXPORT_SYMBOL(fg_to_get_usb_type);
+
 #define CHGR_STS			0x0E
 #define BATT_LESS_THAN_2V		BIT(4)
 #define CHG_HOLD_OFF_BIT		BIT(3)
@@ -928,25 +1050,42 @@ static int get_prop_batt_status(struct smbchg_chip *chip)
 
 	charger_present = is_usb_present(chip) | is_dc_present(chip) |
 			  chip->hvdcp_3_det_ignore_uv;
-	if (!charger_present)
+	if (!charger_present){
+		printk("[BAT][CHG] battery status = DISCHARGING\n");
 		return POWER_SUPPLY_STATUS_DISCHARGING;
+	}
 
 	rc = smbchg_read(chip, &reg, chip->chgr_base + RT_STS, 1);
 	if (rc < 0) {
 		dev_err(chip->dev, "Unable to read RT_STS rc = %d\n", rc);
+		printk("[BAT][CHG] battery status = UNKNOWN\n");
 		return POWER_SUPPLY_STATUS_UNKNOWN;
 	}
 
-	if (reg & BAT_TCC_REACHED_BIT)
-		return POWER_SUPPLY_STATUS_FULL;
+	//ASUS BSP Austin_T : Change FULL condition to make Indicator reasonable
+	if (battery_dc_property == 1) {
+		if (get_prop_batt_capacity(chip) == 100) {
+			printk("[BAT][CHG] battery status = FULL_battery_dc\n");
+			battery_dc_property = 0;
+			return POWER_SUPPLY_STATUS_FULL;
+		}
+	} else {
+		if (reg & BAT_TCC_REACHED_BIT) {
+			printk("[BAT][CHG] battery status = FULL_fg\n");
+			return POWER_SUPPLY_STATUS_FULL;
+		}
+	}
 
 	chg_inhibit = reg & CHG_INHIBIT_BIT;
-	if (chg_inhibit)
+	if (chg_inhibit) {
+		printk("[BAT][CHG] battery status = FULL_1\n");
 		return POWER_SUPPLY_STATUS_FULL;
+	}
 
 	rc = smbchg_read(chip, &reg, chip->chgr_base + CHGR_STS, 1);
 	if (rc < 0) {
 		dev_err(chip->dev, "Unable to read CHGR_STS rc = %d\n", rc);
+		printk("[BAT][CHG] battery status = UNKNOWN_1\n");
 		return POWER_SUPPLY_STATUS_UNKNOWN;
 	}
 
@@ -956,18 +1095,69 @@ static int get_prop_batt_status(struct smbchg_chip *chip)
 		 * not charging
 		 */
 		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		printk("[BAT][CHG] battery status = NOT_CHARGING\n");
 		goto out;
 	}
 
 	chg_type = (reg & CHG_TYPE_MASK) >> CHG_TYPE_SHIFT;
 
-	if (chg_type == BATT_NOT_CHG_VAL && !chip->hvdcp_3_det_ignore_uv)
+	if (chg_type == BATT_NOT_CHG_VAL && !chip->hvdcp_3_det_ignore_uv) {
+		printk("[BAT][CHG] battery status = DISCHARGING_1\n");
 		status = POWER_SUPPLY_STATUS_DISCHARGING;
-	else
+	} else {
+		printk("[BAT][CHG] battery status = CHARGING\n");
 		status = POWER_SUPPLY_STATUS_CHARGING;
+	}
 out:
 	pr_smb_rt(PR_MISC, "CHGR_STS = 0x%02x\n", reg);
 	return status;
+}
+
+#define COS_APSD_RESET_TIME		3000
+void Set_COS_APSD_FLASE_work(struct work_struct *work)
+{
+	COS_APSD = false;
+	power_supply_changed(&smbchg_dev->batt_psy);
+    smbchg_relax(smbchg_dev, PM_RE_APSD_RESET);
+    printk("[BAT][CHG] release wakelock\n");
+}
+
+extern void unknownChgNotify(void)
+{
+	int rc;
+
+	if (g_Charger_mode) {
+		return;
+	}
+
+	if (smbchg_dev->EXT_RE_APSD_flag == 0) {
+		printk("%s received. Floating charger rerun apsd\n",__func__);
+		smbchg_dev->EXT_RE_APSD_flag = 1;
+		rc = rerun_apsd(smbchg_dev);
+		if (rc)
+			printk("Faild to rerun 'APSD', rc=%d\n", rc);
+		return;
+	} else {
+		printk("%s received. Still Floating Charger\n",__func__);
+		smbchg_dev->EXT_RE_APSD_flag = 0;
+		if (smbchg_dev->CHG_TYPE_flag != TYPEC_1P5A && smbchg_dev->CHG_TYPE_flag != TYPEC_3P0A)
+			smbchg_dev->CHG_TYPE_flag = FLOATING;
+	}
+}
+
+extern void dpNotify(void)
+{
+	int rc;
+
+	if (g_Charger_mode) {
+		printk("%s: D+ Notify called & Charger Mode. Rerun_APSD\n",__func__);
+		msleep(8000);
+		COS_APSD = true;
+		rc = rerun_apsd(smbchg_dev);
+        printk("[BAT][CHG] start wakelock\n");
+        smbchg_stay_awake(smbchg_dev, PM_RE_APSD_RESET);
+		schedule_delayed_work(&Set_COS_APSD_work, msecs_to_jiffies(COS_APSD_RESET_TIME));
+	}
 }
 
 #define BAT_PRES_STATUS			0x08
@@ -998,15 +1188,24 @@ static int get_prop_charge_type(struct smbchg_chip *chip)
 	}
 
 	chg_type = (reg & CHG_TYPE_MASK) >> CHG_TYPE_SHIFT;
-	if (chg_type == BATT_NOT_CHG_VAL)
+	if (chg_type == BATT_NOT_CHG_VAL) {
+		printk("[BAT][CHG] %s start, prop_charge_type = 'NONE'\n", __FUNCTION__);
 		return POWER_SUPPLY_CHARGE_TYPE_NONE;
-	else if (chg_type == BATT_TAPER_CHG_VAL)
+	}
+	else if (chg_type == BATT_TAPER_CHG_VAL) {
+		printk("[BAT][CHG] %s start, prop_charge_type = 'TAPER'\n", __FUNCTION__);
 		return POWER_SUPPLY_CHARGE_TYPE_TAPER;
-	else if (chg_type == BATT_FAST_CHG_VAL)
+	}
+	else if (chg_type == BATT_FAST_CHG_VAL) {
+		printk("[BAT][CHG] %s start, prop_charge_type = 'FAST'\n", __FUNCTION__);
 		return POWER_SUPPLY_CHARGE_TYPE_FAST;
-	else if (chg_type == BATT_PRE_CHG_VAL)
+	}
+	else if (chg_type == BATT_PRE_CHG_VAL) {
+		printk("[BAT][CHG] %s start, prop_charge_type = 'TRICKLE'\n", __FUNCTION__);
 		return POWER_SUPPLY_CHARGE_TYPE_TRICKLE;
+	}
 
+	printk("[BAT][CHG] %s start, prop_charge_type = 'NONE_1'\n", __FUNCTION__);
 	return POWER_SUPPLY_CHARGE_TYPE_NONE;
 }
 
@@ -1116,7 +1315,7 @@ static int get_prop_batt_resistance_id(struct smbchg_chip *chip)
 	return rbatt;
 }
 
-#define DEFAULT_BATT_FULL_CHG_CAPACITY	0
+/*#define DEFAULT_BATT_FULL_CHG_CAPACITY	0
 static int get_prop_batt_full_charge(struct smbchg_chip *chip)
 {
 	int bfc, rc;
@@ -1127,7 +1326,7 @@ static int get_prop_batt_full_charge(struct smbchg_chip *chip)
 		bfc = DEFAULT_BATT_FULL_CHG_CAPACITY;
 	}
 	return bfc;
-}
+}*/
 
 #define DEFAULT_BATT_VOLTAGE_NOW	0
 static int get_prop_batt_voltage_now(struct smbchg_chip *chip)
@@ -1469,12 +1668,21 @@ static int smbchg_charging_en(struct smbchg_chip *chip, bool en)
 #define CURRENT_150_MA		150
 #define CURRENT_500_MA		500
 #define CURRENT_900_MA		900
+#define CURRENT_1400_MA		1400
 #define CURRENT_1500_MA		1500
+#define CURRENT_1910_MA		1910
 #define SUSPEND_CURRENT_MA	2
 #define ICL_OVERRIDE_BIT	BIT(2)
 static int smbchg_usb_suspend(struct smbchg_chip *chip, bool suspend)
 {
 	int rc;
+
+	printk("[BAT][CHG] smbchg_usb_suspend, suspend = %d\n", suspend);
+
+	if (usb_alert_flag && is_smbchg_charging(smbchg_dev)) {
+		printk("[BAT][CHG] USB alert triggered, suspend charger\n");
+		suspend = 1;
+	}
 
 	rc = smbchg_masked_write(chip, chip->usb_chgpth_base + CMD_IL,
 			USBIN_SUSPEND_BIT, suspend ? USBIN_SUSPEND_BIT : 0);
@@ -1573,7 +1781,12 @@ static void smbchg_usb_update_online_work(struct work_struct *work)
 						USER_EN_VOTER);
 	int online;
 
-	online = user_enabled && chip->usb_present && !chip->very_weak_charger;
+	//online = user_enabled && chip->usb_present && !chip->very_weak_charger;
+	online = user_enabled && chip->usb_present;
+	if (usb_alert_flag) {
+		printk("[BAT][CHG] USB_alert_flag = 1, set usb online = 0\n");
+		online = 0;
+	}
 
 	mutex_lock(&chip->usb_set_online_lock);
 	if (chip->usb_online != online) {
@@ -1683,6 +1896,7 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 		return 0;
 	}
 	pr_smb(PR_STATUS, "USB current_ma = %d\n", current_ma);
+	printk("[BAT][CHG] USB current_ma = %d\n", current_ma);
 
 	if (current_ma <= SUSPEND_CURRENT_MA) {
 		/* suspend the usb if current <= 2mA */
@@ -1720,8 +1934,24 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 					pr_err("Couldn't set ICL override rc = %d\n",
 							rc);
 			} else {
-				/* default to 500mA */
-				current_ma = CURRENT_500_MA;
+				if (chip->CHG_TYPE_flag == TYPEC_1P5A || chip->CHG_TYPE_flag == TYPEC_3P0A) {
+					if (chip->CHG_TYPE_flag == TYPEC_1P5A)
+						current_ma = CURRENT_1400_MA;
+					else 
+						current_ma = CURRENT_1910_MA;
+					rc = smbchg_set_high_usb_chg_current(chip, current_ma);
+					if (rc < 0) {
+						pr_err("Couldn't set %dmA rc = %d\n", current_ma, rc);
+						goto out;
+					}
+					rc = smbchg_masked_write(chip, chip->usb_chgpth_base + CMD_IL,
+							ICL_OVERRIDE_BIT, ICL_OVERRIDE_BIT);
+					if (rc < 0)
+						pr_err("Couldn't set ICL override rc = %d\n", rc);
+				} else {
+					/* default to 500mA */
+					current_ma = CURRENT_500_MA;
+				}
 			}
 			pr_smb(PR_STATUS,
 				"override_usb_current=%d current_ma set to %d\n",
@@ -1823,6 +2053,7 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 out:
 	pr_smb(PR_STATUS, "usb type = %d current set to %d mA\n",
 			chip->usb_supply_type, chip->usb_max_current_ma);
+	printk("[BAT][CHG] usb type = %d current set to %d mA\n", chip->usb_supply_type, chip->usb_max_current_ma);
 	return rc;
 }
 
@@ -1891,6 +2122,8 @@ static int smbchg_set_fastchg_current_raw(struct smbchg_chip *chip,
 {
 	int i, rc;
 	u8 cur_val;
+
+	printk("[BAT][CHG] FCC_current_ma = %d\n", current_ma);
 
 	/* the fcc enumerations are the same as the usb currents */
 	i = find_smaller_in_array(chip->tables.usb_ilim_ma_table,
@@ -2634,6 +2867,9 @@ static int usb_suspend_vote_cb(struct votable *votable,
 	}
 
 	rc = smbchg_usb_suspend(chip, suspend);
+	if (suspend == true) {
+		ASUSEvtlog("[BAT][CHG] smbchg_usb_suspend, reason = %s\n", client);
+	}
 	if (rc < 0)
 		return rc;
 
@@ -3048,6 +3284,17 @@ static int smbchg_system_temp_level_set(struct smbchg_chip *chip,
 	int rc = 0;
 	int prev_therm_lvl;
 	int thermal_icl_ma;
+
+	Thermal_Level = lvl_sel;
+	thermal_engine_time = jiffies;
+
+	if (!stop_thermal_flag) {
+		printk("[BAT][CHG] thermal engine detect, Thermal_Level = %d\n", Thermal_Level);
+		call_from_thermal_engine = 1; 
+		thermal_level_control(chip);
+	} else {
+		printk("[BAT][CHG] stop_thermal_flag = 1, skip thermal engine\n");
+	}
 
 	if (!chip->thermal_mitigation) {
 		dev_err(chip->dev, "Thermal mitigation not supported\n");
@@ -3822,7 +4069,13 @@ static int smbchg_config_chg_battery_type(struct smbchg_chip *chip)
 	if (chip->battery_type && !strcmp(prop.strval, chip->battery_type))
 		return 0;
 
-	batt_node = of_parse_phandle(node, "qcom,battery-data", 0);
+	if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP) {
+		/*BSP david: table for leo*/
+		batt_node = of_parse_phandle(node, "qcom,battery-data_leo", 0);
+	} else{
+		/*BSP david: table for libra*/
+		batt_node = of_parse_phandle(node, "qcom,battery-data_libra", 0);
+	}
 	if (!batt_node) {
 		pr_smb(PR_MISC, "No batterydata available\n");
 		return 0;
@@ -4364,6 +4617,291 @@ static int smbchg_register_chg_led(struct smbchg_chip *chip)
 	return rc;
 }
 
+//ASUS BSP Austin_T : dump reg ATTR +++
+static ssize_t factorybuild_flag_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		factory_build_flag = false;
+		printk("[BAT][CHG] factory_build_flag = 0\n");
+	} else if (tmp == 1) {
+		factory_build_flag = true;
+		printk("[BAT][CHG] factory_build_flag = 1\n");
+	}
+
+	return len;
+}
+
+static ssize_t factorybuild_flag_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", factory_build_flag);
+}
+
+
+static ssize_t chg_dump_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	printk("[BAT][CHG] Charger dump register start\n");
+	uartlog_dump_regs(smbchg_dev);
+
+	return 0;
+}
+
+static ssize_t batt_info_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	int rc, temp, volt;
+	u8 fcc_current;
+
+	printk("[BAT][CHG] Charger dump register start\n");
+	temp = get_prop_batt_temp(smbchg_dev);
+	volt = get_prop_batt_voltage_now(smbchg_dev)/1000;
+	rc = smbchg_read(smbchg_dev, &fcc_current, smbchg_dev->chgr_base + FCC_CFG, 1);
+	printk("[BAT][CHG] Battery temp = %d\n", temp);
+	printk("[BAT][CHG] Battery volt = %d\n", volt);
+	printk("[BAT][CHG] FCC_register = %02X\n", fcc_current);
+
+	return sprintf(buf, "Battery temp = %d, volt = %d\n", temp, volt);
+}
+
+static ssize_t CHG_TYPE_now_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	if (smbchg_dev->CHG_TYPE_flag == NONE)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = NONE\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == OTHERS)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = OTHERS\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == SDP)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = SDP\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == CDP)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = CDP\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == DCP_1A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = DCP_1A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == DCP_2A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = DCP_2A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == PB_2A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = PB_2A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == RESERVE_390_1A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = RESERVE_390_1A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == RESERVE_100_1A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = RESERVE_100_1A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == ASUS_750K)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = ASUS_750K\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == ASUS_200K)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = ASUS_200K\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == UNDEFINED)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = UNDEFINED\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == FLOATING)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = FLOATING\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == ADC_NOT_READY_1A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = ADC_NOT_READY_1A\n");
+	
+	if (smbchg_dev->CHG_TYPE_flag == TYPEC_1P5A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = TYPEC_1P5A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == TYPEC_3P0A)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = TYPEC_3P0A\n");
+
+	if (smbchg_dev->CHG_TYPE_flag == ELSE)
+		return sprintf(buf, "[BAT][CHG] CHG_TYPE_now = ELSE\n");
+
+	return 0;
+}
+
+static ssize_t ASUS_Adapter_Detect_Value_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	return sprintf(buf, "0x%xh\n", AIN2_Value);
+}
+
+extern u8 thermal_AIN1_dump_value(void);
+static ssize_t PRT8301_temp_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{	
+	int temp;
+
+	temp = judge_PRT8301_temp();
+
+	return sprintf(buf, "%d\n", temp);
+}
+
+static ssize_t stop_thermal_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	return sprintf(buf, "stop_thermal_flag = %d\n", stop_thermal_flag);
+}
+
+static ssize_t stop_thermal_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		stop_thermal_flag = false;
+		printk("[BAT][CHG] stop_thermal_flag = 0\n");
+	} else if (tmp == 1) {
+		stop_thermal_flag = true;
+		printk("[BAT][CHG] stop_thermal_flag = 1\n");
+	}
+
+	smbchg_jeita_start_work(smbchg_dev, 0);
+
+	return len;
+}
+
+static ssize_t ChargerMode_CDP_show(struct device *dev, struct device_attribute *da,
+	char *buf)
+{
+	return sprintf(buf, "%d\n", COS_APSD);
+}
+
+static ssize_t BR_countrycode_flag_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		BR_countrycode_flag = false;
+		printk("[BAT][CHG] BR_countrycode_flag = 0\n");
+	} else if (tmp == 1) {
+		BR_countrycode_flag = true;
+		printk("[BAT][CHG] BR_countrycode_flag = 1\n");
+	}
+
+	return len;
+}
+
+static ssize_t BR_countrycode_flag_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+
+	return sprintf(buf, "%d\n", BR_countrycode_flag);
+}
+
+static ssize_t boot_completed_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		boot_completed_flag = false;
+		printk("[BAT][CHG] boot_completed_flag = 0\n");
+	} else if (tmp == 1) {
+		boot_completed_flag = true;
+		printk("[BAT][CHG] boot_completed_flag = 1, check usb alert\n");
+		schedule_delayed_work(&USB_alert_work, 0);
+	}
+
+	return len;
+}
+
+static ssize_t boot_completed_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", boot_completed_flag);
+}
+
+static ssize_t special_connector_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		special_connector_flag = false;
+		printk("[BAT][CHG] special_connector_flag = 0\n");
+	} else if (tmp == 1) {
+		special_connector_flag = true;
+		printk("[BAT][CHG] special_connector_flag = 1\n");
+	}
+
+	return len;
+}
+
+static ssize_t special_connector_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", special_connector_flag);
+}
+
+static ssize_t demo_app_property_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+{
+	int tmp = 0;
+
+	tmp = buf[0] - 48;
+
+	if (tmp == 0) {
+		demo_app_property_flag = false;
+		printk("[BAT][CHG] demo_app_property_flag = 0\n");
+	} else if (tmp == 1) {
+		demo_app_property_flag = true;
+		printk("[BAT][CHG] demo_app_property_flag = 1\n");
+    }
+
+	return len;
+}
+
+static ssize_t demo_app_property_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+       return sprintf(buf, "%d\n", demo_app_property_flag);
+}
+
+static DEVICE_ATTR(factorybuild_flag, 0664, factorybuild_flag_show, factorybuild_flag_store);
+static DEVICE_ATTR(chg_dump, 0664, chg_dump_show, NULL);
+static DEVICE_ATTR(batt_info, 0664, batt_info_show, NULL);
+static DEVICE_ATTR(CHG_TYPE_now, 0664, CHG_TYPE_now_show, NULL);
+static DEVICE_ATTR(ASUS_Adapter_Detect_Value, 0664, ASUS_Adapter_Detect_Value_show, NULL);
+static DEVICE_ATTR(PRT8301_temp, 0664, PRT8301_temp_show, NULL);
+static DEVICE_ATTR(stop_thermal, 0664, stop_thermal_show, stop_thermal_store);
+static DEVICE_ATTR(ChargerMode_CDP, 0664, ChargerMode_CDP_show, NULL);
+static DEVICE_ATTR(BR_countrycode, 0664, BR_countrycode_flag_show, BR_countrycode_flag_store);
+static DEVICE_ATTR(boot_completed, 0664, boot_completed_show, boot_completed_store);
+static DEVICE_ATTR(special_connector, 0664, special_connector_show, special_connector_store);
+static DEVICE_ATTR(demo_app_property, 0664, demo_app_property_show, demo_app_property_store);
+
+static struct attribute *dump_reg_attrs[] = {
+	&dev_attr_factorybuild_flag.attr,
+	&dev_attr_chg_dump.attr,
+	&dev_attr_batt_info.attr,
+	&dev_attr_CHG_TYPE_now.attr,
+	&dev_attr_ASUS_Adapter_Detect_Value.attr,
+	&dev_attr_PRT8301_temp.attr,
+	&dev_attr_stop_thermal.attr,
+	&dev_attr_ChargerMode_CDP.attr,
+	&dev_attr_BR_countrycode.attr,
+	&dev_attr_boot_completed.attr,
+	&dev_attr_special_connector.attr,
+	&dev_attr_demo_app_property.attr,
+	NULL
+};
+
+static const struct attribute_group dump_reg_attr_group = {
+	.attrs = dump_reg_attrs,
+};
+//ASUS BSP Austin_T : dump reg ATTR ---
+
 static int vf_adjust_low_threshold = 5;
 module_param(vf_adjust_low_threshold, int, 0644);
 
@@ -4647,8 +5185,8 @@ static int smbchg_set_optimal_charging_mode(struct smbchg_chip *chip, int type)
 	return 0;
 }
 
-#define DEFAULT_SDP_MA		100
-#define DEFAULT_CDP_MA		1500
+#define DEFAULT_SDP_MA		500		//100>>500
+#define DEFAULT_CDP_MA		1400
 static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 						enum power_supply_type type)
 {
@@ -4667,7 +5205,7 @@ static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 	 * modes, skip all BC 1.2 current if external typec is supported.
 	 * Note: for SDP supporting current based on USB notifications.
 	 */
-	if (chip->typec_psy && (type != POWER_SUPPLY_TYPE_USB))
+	if (chip->typec_psy && (type != POWER_SUPPLY_TYPE_USB) && (chip->typec_current_ma != 500))
 		current_limit_ma = chip->typec_current_ma;
 	else if (type == POWER_SUPPLY_TYPE_USB)
 		current_limit_ma = DEFAULT_SDP_MA;
@@ -4890,12 +5428,70 @@ static int smbchg_restricted_charging(struct smbchg_chip *chip, bool enable)
 	return rc;
 }
 
+//ASUS BSP Austin_T : USB IN intial settings +++
+#define PCC_CFG 			0xF1
+#define PCC_MASk			SMB_MASK(2, 0)
+#define PCC_150mA			0x1
+#define CHGR_CFG2				0xFC
+#define CHG_EN_POLARITY_BIT		BIT(6)
+#define SMBCHGL_CHGR_CHGR_CFG2_MASK SMB_MASK(7,0)
+#define REGISTER_CONTROL_CHARGER	0x40
+#define SMBCHGL_USB_CMD_IL_MASK		SMB_MASK(7,0)
+#define SMBCHGL_USB_CMD_IL_INIT		0x8
+static void usb_insertion_remove_init_setting(struct smbchg_chip *chip)
+{
+	int rc;
+
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + PCC_CFG, PCC_MASk, PCC_150mA);
+	if (rc)
+	pr_err("[BAT][CHG] Failed to set PCC, rc = %d\n", rc);
+
+	if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP) {
+		rc = smbchg_sec_masked_write(chip, chip->chgr_base + FCC_CFG, FCC_MASK, 0x7);
+	} else {
+		rc = smbchg_sec_masked_write(chip, chip->chgr_base + FCC_CFG, FCC_MASK, 0x8);
+	}
+	if (rc)
+	pr_err("[BAT][CHG] Failed to set FCC, rc = %d\n", rc);
+
+	rc = smbchg_sec_masked_write(chip, chip->usb_chgpth_base + IL_CFG,
+			USBIN_INPUT_MASK, 0x9);
+	if (rc)
+		pr_err("[BAT][CHG] Failed to set USBIN_ICL, rc = %d\n", rc);
+
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG2,
+			CHG_EN_POLARITY_BIT, 0);
+	if (rc)
+		pr_err("[BAT][CHG] Failed to set CHGR_CFG2 HIGH, rc = %d\n", rc);
+
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG2,
+			CHG_EN_POLARITY_BIT, CHG_EN_POLARITY_BIT);
+	if (rc)
+		pr_err("[BAT][CHG] Failed to set CHGR_CFG2 LOW, rc = %d\n", rc);
+
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG2,
+			SMBCHGL_CHGR_CHGR_CFG2_MASK, REGISTER_CONTROL_CHARGER);
+	if (rc)
+		pr_err("[BAT][CHG] Failed to set CHGR_CFG2 Register_Control, rc = %d\n", rc);
+
+	rc = smbchg_masked_write(chip, chip->usb_chgpth_base + CMD_IL,
+			SMBCHGL_USB_CMD_IL_MASK, SMBCHGL_USB_CMD_IL_INIT);
+	if (rc)
+		pr_err("[BAT][CHG] Failed to set CMD_IL Register_Control, rc = %d\n", rc);
+}
+//ASUS BSP Austin_T : USB IN intial settings ---
+
 static void handle_usb_removal(struct smbchg_chip *chip)
 {
 	struct power_supply *parallel_psy = get_parallel_psy(chip);
 	int rc;
 
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
 	pr_smb(PR_STATUS, "triggered\n");
+
+	usb_alert_flag = 0;		//Austin_Tseng +++
+
 	smbchg_aicl_deglitch_wa_check(chip);
 	/* Clear the OV detected status set before */
 	if (chip->usb_ov_det)
@@ -4928,6 +5524,29 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 			"usb psy does not allow updating prop %d rc = %d\n",
 			POWER_SUPPLY_HEALTH_UNKNOWN, rc);
 
+//ASUS BSP Austin_T : pull low ADCPWREN & DPM_SW_EN when plug out
+	rc = gpio_direction_output(global_gpio->ADCPWREN, 0);
+	if (rc)
+		printk("[BAT][CHG] failed to pull-low ADCPWREN-gpios01\n");
+
+	rc = gpio_direction_output(global_gpio->DPM_SW_EN, 0);
+	if (rc)
+		printk("[BAT][CHG] failed to pull-low DPM_SW_EN-gpio134\n");
+
+	cancel_delayed_work(&adapter_detect_work);	 //Austin_T : Reset adapter_detect queue work
+	cancel_delayed_work(&asus_adapter_adc_work); //Austin_T : Reset asus_adapter_adc queue work
+	cancel_delayed_work(&jeita_work);			 //Austin_T : Reset jeita queue work
+	cancel_delayed_work(&SetBatRTCWorker);
+	chip->CHG_TYPE_flag = NONE;
+	Thermal_Level_old = 0;
+	smbchg_charging_en(chip, true);
+	AIN2_Value = 0;
+
+	smbchg_relax(chip, PM_ADAPTER_JUDGE);
+	smbchg_relax(chip, PM_ADC_JUDGE);
+
+	focal_usb_detection(false);	//ASUS BSP Nancy : notify touch cable out +++
+
 	if (parallel_psy && chip->parallel_charger_detected)
 		power_supply_set_present(parallel_psy, false);
 	if (chip->parallel.avail && chip->aicl_done_irq
@@ -4949,6 +5568,8 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 		HVDCP_SHORT_DEGLITCH_VOTER, false, 0);
 	if (!chip->hvdcp_not_supported)
 		restore_from_hvdcp_detection(chip);
+
+	usb_insertion_remove_init_setting(chip);	//ASUS BSP Austin_T : USB initials
 }
 
 static bool is_usbin_uv_high(struct smbchg_chip *chip)
@@ -4964,6 +5585,761 @@ static bool is_usbin_uv_high(struct smbchg_chip *chip)
 	return reg &= USBIN_UV_BIT;
 }
 
+//ASUS BSP Austin_Tseng : JEITA judge function +++
+static struct timespec last_jeita_time;
+
+#define CHGR_CCMP_CFG			0xFA
+#define JEITA_TEMP_HARD_LIMIT_BIT	BIT(5)
+#define ONE_CYCLE_CHECK_BIT		BIT(5)
+
+#define JEITA_INIT_MASK		SMB_MASK(3, 0)
+#define JEITA_STATUS_MASK	SMB_MASK(7,0)
+
+#define EN_BAT_CHG_EN_COMMAND_TRUE		0
+#define EN_BAT_CHG_EN_COMMAND_FALSE 	BIT(1)
+#define SMBCHG_FLOAT_VOLTAGE_VALUE_4P38		0x2D
+#define SMBCHG_FLOAT_VOLTAGE_VALUE_4P06		0x1C
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_650MA 	0x7
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_700MA 	0x8
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_900MA 	0x9
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_1100MA 	0xC
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_1600MA 	0x11
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_1910MA 	0x15
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_2400MA 	0x1D
+#define SMBCHG_FAST_CHG_CURRENT_VALUE_2600MA 	0x1E
+
+#define ADC_WAIT_TIME			30000
+#define JEITA_WORKQUEUE_TIME	60000
+
+enum JEITA_state {
+	JEITA_STATE_INITIAL,
+	JEITA_STATE_LESS_THAN_15,
+	JEITA_STATE_RANGE_15_to_100,
+	JEITA_STATE_RANGE_100_to_200,
+	JEITA_STATE_RANGE_200_to_500,
+	JEITA_STATE_RANGE_500_to_600,
+	JEITA_STATE_LARGER_THAN_600,
+};
+
+static bool is_smbchg_charging(struct smbchg_chip *chip)
+{
+	bool charger_present;
+
+	charger_present = is_usb_present(chip) | is_dc_present(chip);
+	return charger_present;
+}
+
+static int jeita_status_regs_write(u8 chg_en, u8 FV_CFG, u8 FCC)
+{
+	int rc;
+
+	rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->bat_if_base + CMD_CHG_REG,
+			EN_BAT_CHG_BIT, chg_en);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't write charging_enable rc = %d\n", rc);
+		return rc;
+	}
+
+	rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->chgr_base + VFLOAT_CFG_REG,
+			JEITA_STATUS_MASK, FV_CFG);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't write FV_CFG_reg_value rc = %d\n", rc);
+		return rc;
+	}
+
+	rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->chgr_base + FCC_CFG,
+			FCC_MASK, FCC);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't write FCC_reg_value rc = %d\n", rc);
+		return rc;
+	}
+
+	return 0;
+}
+extern int get_raw_capacity(void);
+static int SW_recharge(struct smbchg_chip *chip)
+{
+	u8 reg;
+	int rc;
+
+	rc = smbchg_read(chip, &reg, chip->chgr_base + CHGR_STS, 1);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't read onecycle_check_bit rc = %d\n", rc);
+		return rc;
+	}
+
+	if ((get_raw_capacity() <= 98) && (reg & ONE_CYCLE_CHECK_BIT) ) {
+
+		printk("[BAT][CHG] start ASUS_sw_recharge\n");
+		rc = smbchg_sec_masked_write(chip, chip->bat_if_base + CMD_CHG_REG,
+		EN_BAT_CHG_BIT, EN_BAT_CHG_BIT);
+		if (rc < 0) {
+			printk("[BAT][CHG] Couldn't write charging_enable rc = %d\n", rc);
+			return rc;
+		}
+		rc = smbchg_read(chip, &reg, chip->bat_if_base + CMD_CHG_REG, 1);
+		printk("[BAT][CHG] register 1242 = %02X\n", reg);
+
+		rc = smbchg_sec_masked_write(chip, chip->bat_if_base + CMD_CHG_REG,
+		EN_BAT_CHG_BIT, 0);
+		if (rc < 0) {
+			printk("[BAT][CHG] Couldn't write charging_enable rc = %d\n", rc);
+			return rc;
+		}
+		rc = smbchg_read(chip, &reg, chip->bat_if_base + CMD_CHG_REG, 1);
+		printk("[BAT][CHG] register 1242 = %02X\n", reg);
+	}
+	return 0;
+}
+
+int smbchg_jeita_judge_state(int old_State, int batt_tempr)
+{
+	int result_State;
+
+	//decide value to set each reg (Vchg, Charging enable, Fast charge current)
+	//batt_tempr < 1.5
+	if (batt_tempr < 15) {
+		result_State = JEITA_STATE_LESS_THAN_15;
+	//1.5 <= batt_tempr < 10
+	} else if (batt_tempr < 100) {
+		result_State = JEITA_STATE_RANGE_15_to_100;
+	//10 <= batt_tempr < 20
+	} else if (batt_tempr < 200) {
+		result_State = JEITA_STATE_RANGE_100_to_200;
+	//20 <= batt_tempr < 50
+	} else if (batt_tempr < 500) {
+		result_State = JEITA_STATE_RANGE_200_to_500;
+	//50 <= batt_tempr < 60
+	} else if (batt_tempr < 600) {
+		result_State = JEITA_STATE_RANGE_500_to_600;
+	//60 <= batt_tempr
+	} else{
+		result_State = JEITA_STATE_LARGER_THAN_600;
+	}
+
+	//BSP david: do 3 degree hysteresis
+	if (old_State == JEITA_STATE_LESS_THAN_15 && result_State == JEITA_STATE_RANGE_15_to_100) {
+		if (batt_tempr <= 45) {
+			result_State = old_State;
+		}
+	}
+	if (old_State == JEITA_STATE_RANGE_15_to_100 && result_State == JEITA_STATE_RANGE_100_to_200) {
+		if (batt_tempr <= 130) {
+			result_State = old_State;
+		}
+	}
+	if (old_State == JEITA_STATE_RANGE_100_to_200 && result_State == JEITA_STATE_RANGE_200_to_500) {
+		if (batt_tempr <= 230) {
+			result_State = old_State;
+		}
+	}
+	if (old_State == JEITA_STATE_RANGE_500_to_600 && result_State == JEITA_STATE_RANGE_200_to_500) {
+		if (batt_tempr >= 470) {
+			result_State = old_State;
+		}
+	}
+	if (old_State == JEITA_STATE_LARGER_THAN_600 && result_State == JEITA_STATE_RANGE_500_to_600) {
+		if (batt_tempr >= 570) {
+			result_State = old_State;
+		}
+	}
+	return result_State;
+}
+
+static int smbchg_detect_batt_tempr(struct smbchg_chip *chip)
+{
+	int batt_tempr;
+	static int state = JEITA_STATE_INITIAL;
+
+	batt_tempr = get_prop_batt_temp(chip);
+
+	state = smbchg_jeita_judge_state(state, batt_tempr);
+
+	return state;
+}
+
+static int smbchg_jeita_initial_settings(struct smbchg_chip *chip)
+{
+	int rc;
+
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CCMP_CFG,
+			JEITA_TEMP_HARD_LIMIT_BIT, 0);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't set 10FA_bit[5] rc=%d\n", rc);
+		return rc;
+	}
+	rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CCMP_CFG,
+			JEITA_INIT_MASK, 0x00);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't set 10FA_bit[3:0] rc=%d\n", rc);
+		return rc;
+	}
+	return rc;
+}
+
+#define USBIN_IL_500mA	0x4
+#define USBIN_IL_700mA 	0x8
+#define USBIN_IL_900mA 	0x9
+#define USBIN_IL_1400mA 0xE
+#define USBIN_IL_1910mA 0x15
+#define SMBCHGL_USB_USBIN_IL_CFG_MASK SMB_MASK(7,0)
+
+int judge_PRT8301_temp(void)
+{
+	int temp, temp_mc;
+	int volt;
+	int AIN1;
+
+	AIN1 = thermal_AIN1_dump_value();
+	volt = (int)(1200*AIN1/255);
+	temp = voltage_to_temp(volt);
+	temp_mc = 1000*temp;
+	
+	return temp_mc;
+}
+
+void thermal_level_control(struct smbchg_chip *chip)
+{
+	int cap;
+	bool thermal_suspend_charging;
+	u8 ICL;
+	int rc;
+	int latest_temp;
+	int latest_level;
+
+	// BSP Austin_T : Thermal policy stage 1, 2 and 3
+	if (!is_smbchg_charging(smbchg_dev)) {
+		printk("[BAT][CHG] No inputs present, skipping thermal control\n");
+		return;
+	}
+
+	mutex_lock(&thermal_work_lock);
+
+	if (chip->CHG_TYPE_flag == SDP || chip->CHG_TYPE_flag == FLOATING || chip->CHG_TYPE_flag == NONE) {
+		printk("[BAT][CHG] SDP inserted, skipping thermal control\n");
+		goto unlock;
+	}
+
+	if (call_from_thermal_engine) {
+		latest_level = Thermal_Level;
+	} else {	
+		latest_temp = judge_PRT8301_temp();
+		latest_level = t2l_sample(latest_temp);
+	}
+	call_from_thermal_engine = 0;
+	printk("[BAT][CHG] latest thermal level = %d\n", latest_level);
+
+	if (latest_level != Thermal_Level && (jiffies - thermal_engine_time) < msecs_to_jiffies(12000)) {
+		printk("[BAT][CHG] two judgment is too close, skip thermal_control\n");
+		goto unlock;
+	}
+
+	if (Thermal_Level_old != latest_level || latest_level == 2) {
+		printk("[BAT][CHG] Thermal_Level old : %d, new : %d\n", Thermal_Level_old, latest_level);
+
+		switch(latest_level) {
+		case 0:	
+			thermal_suspend_charging = 0;
+			if (chip->CHG_TYPE_flag == TYPEC_3P0A || chip->CHG_TYPE_flag == ASUS_750K || 
+				chip->CHG_TYPE_flag == ASUS_200K || chip->CHG_TYPE_flag == PB_2A || chip->CHG_TYPE_flag == DCP_2A)
+				ICL = USBIN_IL_1910mA;
+			else if (chip->CHG_TYPE_flag == TYPEC_1P5A || chip->CHG_TYPE_flag == CDP)
+				ICL = USBIN_IL_1400mA;
+			else if (chip->CHG_TYPE_flag == DCP_1A || chip->CHG_TYPE_flag == RESERVE_390_1A || 
+				chip->CHG_TYPE_flag == RESERVE_100_1A || chip->CHG_TYPE_flag == ADC_NOT_READY_1A || 
+				chip->CHG_TYPE_flag == UNDEFINED || chip->CHG_TYPE_flag == OTHERS)
+				ICL = USBIN_IL_900mA;
+			break;
+		case 1:
+			thermal_suspend_charging = 0;
+			ICL = USBIN_IL_900mA;
+			break;
+		case 2:
+			thermal_suspend_charging = 0;
+			cap = get_prop_batt_capacity(chip);
+			if (cap >= 15)
+				ICL = USBIN_IL_500mA; 
+			else if (cap >= 8)
+				ICL = USBIN_IL_700mA;
+			else
+				ICL = USBIN_IL_900mA;
+			break;
+		case 3:
+			thermal_suspend_charging = 1;
+			break;
+		default:
+			thermal_suspend_charging = 0;
+			break;
+		}
+		Thermal_Level_old = latest_level;
+
+		rc = vote(smbchg_dev->usb_suspend_votable, THERMAL_EN_VOTER, thermal_suspend_charging, 0);
+		if (rc < 0)
+			dev_err(chip->dev, "Couldn't set usb suspend rc %d\n", rc);
+
+		rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->usb_chgpth_base + IL_CFG, SMBCHGL_USB_USBIN_IL_CFG_MASK, ICL);
+		if (rc)
+			printk("[BAT][CHG] Failed to write 13F2, rc = %d\n", rc);
+
+		smbchg_rerun_aicl(smbchg_dev);
+	}
+unlock:
+	mutex_unlock(&thermal_work_lock);
+}
+
+#define ADAPTER_DET_MS			3000	//Set ASUS adapter detect delay time
+#define ADAPTER_DET_MS_BOOT		10000
+#define ADAPTER_DET_MS_COS_MODE	12000
+#define ADAPTER_DET_AFT_PROBE	1000	//Set ASUS adapter detected time after probe (ms)
+#define DEFAULT_DCP_1A			900		//ASUS BSP Austin_T : CHG_TYPE=DCP_1A
+#define DEFAULT_DCP_2A			1910	//ASUS BSP Austin_T : CHG_TYPE=PB_2A
+#define DEFAULT_FLOATING_500mA	500		//ASUS BSP Austin_T : CHG_TYPE=FLOATING_500mA
+#define Default_CHG_mode_500mA	500
+#define Default_ELSE_500mA		500
+#define TYPEC_1P5A_1400mA		1400	//ASUS BSP Austin_T : CHG_TYPE=TYPEC_1P5A
+#define TYPEC_3P0A_1910mA		1910	//ASUS BSP Austin_T : CHG_TYPE=TYPEC_3P0A
+#define ICL_MODE_MASK		SMB_MASK(5, 4)
+#define ICL_MODE 			0x9
+#define ICL_MODE_500mA		0x20
+
+#define ADF_PATH "/ADF/ADF"
+static mm_segment_t oldfs;
+static void initKernelEnv(void)
+{
+    oldfs = get_fs();
+    set_fs(KERNEL_DS);
+}
+
+static void deinitKernelEnv(void)
+{
+    set_fs(oldfs);
+}
+
+static bool ADF_check_status(void)
+{
+	uint8_t *buf = NULL;
+	int readlen = 0;
+	off_t fsize;
+    struct inode *inode;
+	struct file *fd;
+
+    initKernelEnv();
+
+	fd = filp_open(ADF_PATH, O_RDONLY, 0);
+	if (IS_ERR_OR_NULL(fd)) {
+        printk("[BAT][CHG] OPEN (%s) failed\n", ADF_PATH);
+		return false;
+    }
+
+	inode = fd->f_dentry->d_inode;
+    fsize = inode->i_size;
+    buf = kmalloc(fsize, GFP_KERNEL);
+
+	readlen = fd->f_op->read(fd, buf, fsize, &fd->f_pos);
+	if (readlen < 0) {
+		printk("[BAT][CHG] Read (%s) error\n", ADF_PATH);
+        deinitKernelEnv();
+        filp_close(fd, NULL);
+        kfree(buf);
+		return false;
+	}
+	deinitKernelEnv();
+ 	filp_close(fd,NULL);
+
+	if (readlen != 4) {
+		return false;
+	} else if (buf[3] == 0x1 || buf[3] == 0x2) {
+		return true;
+	} else
+		return false;
+}
+
+void jeita_judge_work(struct work_struct *work)
+{
+	int state;
+	int rc, ret;
+	int batt_volt = 4000;
+	u8 FV_reg;
+	u8 FV_CFG_reg_value = 0;	//set float_voltage_reg_value
+	u8 FCC_reg_value = 0;		//set fast_charge_current_reg_value
+	u8 charging_enable = 0;
+	//u8 overlimit = 0;
+	u8 charging_status = 0;
+	u8 reg;
+	bool demo_app_status_flag = false;
+
+	if (!smbchg_dev) {
+		pr_err("%s: smbchg_dev is null due to driver probed isn't ready\n",
+		__FUNCTION__);
+		return;
+	}
+
+	if (!is_smbchg_charging(smbchg_dev)) {
+		printk("[BAT][CHG] No inputs present, skipping\n");
+		return;
+	}
+
+	if (get_prop_batt_capacity(smbchg_dev) >= 1 && smbchg_dev->CHG_TYPE_flag == UNDEFINED) {
+
+		rc = gpio_direction_output(global_gpio->ADCPWREN, 0);
+		if (ret)
+			printk("[BAT][CHG] failed to pull-low ADCPWREN-gpios01\n");
+
+		rc = gpio_direction_output(global_gpio->DPM_SW_EN, 1);
+		if (ret)
+			printk("[BAT][CHG] failed to pull-high DPM_SW_EN-gpios134\n");
+
+		if (factory_build_flag) {
+			printk("[BAT][CHG] factory_build, cancel ADC_WAIT_TIME\n");
+			smbchg_stay_awake(smbchg_dev, PM_ADC_JUDGE);
+			schedule_delayed_work(&asus_adapter_adc_work, 0);
+		} else {
+			printk("[BAT][CHG] NOT factory_build, ADC_WAIT_TIME = 30s \n");
+			smbchg_stay_awake(smbchg_dev, PM_ADC_JUDGE);
+			schedule_delayed_work(&asus_adapter_adc_work, msecs_to_jiffies(ADC_WAIT_TIME));
+		}
+
+		return;
+	}
+
+	mutex_lock(&jeita_work_lock);
+
+	if (BR_countrycode_flag) {
+		rc = smbchg_read(smbchg_dev, &reg, smbchg_dev->usb_chgpth_base + ICL_STS_1_REG, 1);
+		if (smbchg_dev->CHG_TYPE_flag == DCP_2A && (reg & AICL_STS_BIT) == 0x20 && (reg & ICL_STS_MASK) <= 0x11) {
+			smbchg_dev->CHG_TYPE_flag = DCP_1A;
+			smbchg_dev->usb_target_current_ma = DEFAULT_DCP_1A;
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+		}
+	}
+
+	smbchg_jeita_initial_settings(smbchg_dev);
+
+	state = smbchg_detect_batt_tempr(smbchg_dev);
+
+	rc = smbchg_read(smbchg_dev, &FV_reg, smbchg_dev->chgr_base + VFLOAT_CFG_REG, 1);
+	if (rc < 0) {
+		printk("[BAT][CHG] Couldn't read FV_reg rc = %d\n", rc);
+	}
+
+	set_property_on_fg(smbchg_dev, POWER_SUPPLY_PROP_UPDATE_NOW, 1);
+	batt_volt = get_prop_batt_voltage_now(smbchg_dev)/1000;
+
+	switch (state) {
+	case JEITA_STATE_LESS_THAN_15:
+		charging_enable = EN_BAT_CHG_EN_COMMAND_FALSE;
+		FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_650MA;
+		else
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_700MA;
+		printk("[BAT][CHG] %s: temperature < 1.5\n", __FUNCTION__);
+		break;
+	case JEITA_STATE_RANGE_15_to_100:
+		charging_enable = EN_BAT_CHG_EN_COMMAND_TRUE;
+		FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_650MA;
+		else
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_700MA;
+		printk("[BAT][CHG] %s: 1.5 <= temperature < 10\n", __FUNCTION__);
+		rc = SW_recharge(smbchg_dev);
+		if (rc < 0) {
+			printk("[BAT][CHG] SW_recharge failed rc = %d\n", rc);
+		}
+		break;
+	case JEITA_STATE_RANGE_100_to_200:
+		charging_enable = EN_BAT_CHG_EN_COMMAND_TRUE;
+		FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_650MA;
+		else
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_900MA;
+		printk("[BAT][CHG] %s: 10 <= temperature < 20\n", __FUNCTION__);
+		rc = SW_recharge(smbchg_dev);
+		if (rc < 0) {
+			printk("[BAT][CHG] SW_recharge failed rc = %d\n", rc);
+		}
+		break;
+	case JEITA_STATE_RANGE_200_to_500:
+		charging_enable = EN_BAT_CHG_EN_COMMAND_TRUE;
+		FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		if (batt_volt <= 4000) {
+			if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_2400MA;
+			else
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_2600MA;
+		} else if (batt_volt > 4000 && batt_volt <= 4200) {
+			if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_1600MA;
+			else
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_1910MA;
+		} else {
+			if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_650MA;
+			else
+				FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_900MA;
+		}
+		printk("[BAT][CHG] %s: 20 <= temperature < 50\n", __FUNCTION__);
+		rc = SW_recharge(smbchg_dev);
+		if (rc < 0) {
+			printk("[BAT][CHG] SW_recharge failed rc = %d\n", rc);
+		}
+		break;
+	case JEITA_STATE_RANGE_500_to_600:
+		if (batt_volt >= 4100 && FV_reg == 0x2D) {
+			charging_enable = EN_BAT_CHG_EN_COMMAND_FALSE;
+			FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		} else {
+			charging_enable = EN_BAT_CHG_EN_COMMAND_TRUE;
+			FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P06;
+		}
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_1100MA;
+		else
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_900MA;
+		printk("[BAT][CHG] %s: 50 <= temperature < 60\n", __FUNCTION__);
+		break;
+	case JEITA_STATE_LARGER_THAN_600:
+		charging_enable = EN_BAT_CHG_EN_COMMAND_FALSE;
+		FV_CFG_reg_value = SMBCHG_FLOAT_VOLTAGE_VALUE_4P38;
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_1100MA;
+		else
+			FCC_reg_value = SMBCHG_FAST_CHG_CURRENT_VALUE_900MA;
+		printk("[BAT][CHG] %s: temperature >= 60\n", __FUNCTION__);
+		break;
+	}
+
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 70% in Factory +++
+	/*if (factory_build_flag) {
+		if (en_charging_limit) {
+			if (get_prop_batt_capacity(smbchg_dev) >= 70) {
+				overlimit = EN_BAT_CHG_EN_COMMAND_FALSE;
+				printk("[BAT][CHG] En_charging_limit triggered & Capacity > 70, diasble charging!\n");
+			} else {
+				overlimit = EN_BAT_CHG_EN_COMMAND_TRUE;
+			}
+		} else {
+			overlimit = EN_BAT_CHG_EN_COMMAND_TRUE;
+		}
+		charging_status = (charging_enable | overlimit);
+	} else {
+		charging_status = charging_enable;
+	}*/
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 70% in Factory ---
+
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 60% in Demo APP  +++
+	if (demo_app_property_flag) {
+		demo_app_status_flag = ADF_check_status();
+		if (demo_app_status_flag) {
+			if (get_prop_batt_capacity(smbchg_dev) > 60) {
+				smbchg_usb_suspend(smbchg_dev, true);
+				charging_status = EN_BAT_CHG_EN_COMMAND_FALSE;
+				printk("[BAT][CHG] Demo APP triggered & Capacity > 60, suspend charger\n");
+			} else if (get_prop_batt_capacity(smbchg_dev) >= 58) {
+				smbchg_usb_suspend(smbchg_dev, false);
+				charging_status = EN_BAT_CHG_EN_COMMAND_FALSE;
+				printk("[BAT][CHG] Demo APP triggered & Capacity >= 58, stop battery charging\n");
+			} else {
+				smbchg_usb_suspend(smbchg_dev, false);
+			}
+		} else {
+			smbchg_usb_suspend(smbchg_dev, false);
+		}
+	} else {
+		smbchg_usb_suspend(smbchg_dev, false);
+	}
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 60% in Demo APP  ---
+
+	printk("[BAT][CHG] JEITA_charging_status = %d\n", charging_status);
+
+	rc = jeita_status_regs_write(charging_status, FV_CFG_reg_value, FCC_reg_value);
+	if (rc < 0)
+		printk("[BAT][CHG] Couldn't write jeita_status_register rc = %d\n", rc);
+
+//ASUS BSP Austin_Tseng : Combine JEITA with Thermal policy +++
+	if (!stop_thermal_flag)
+		thermal_level_control(smbchg_dev);
+	else
+		printk("[BAT][CHG] stop_thermal_flag = 1, don't run thermal_level_control\n");
+
+	mutex_unlock(&jeita_work_lock);
+
+	if (is_smbchg_charging(smbchg_dev)) {
+		last_jeita_time = current_kernel_time();
+		schedule_delayed_work(&jeita_work, msecs_to_jiffies(JEITA_WORKQUEUE_TIME));
+		schedule_delayed_work(&SetBatRTCWorker, 0);
+	}
+}
+
+void smbchg_jeita_start_work(struct smbchg_chip *chip, int time)
+{
+	cancel_delayed_work(&jeita_work);
+	schedule_delayed_work(&jeita_work, msecs_to_jiffies(time));
+}
+//ASUS BSP Austin_Tseng : JEITA judge function ---
+
+//ASUS BSP Austin_Tseng : Adapter judge function +++
+void adapter_detect_judge_work(struct work_struct *work)
+{
+	char *usb_type_name = "null";
+	enum power_supply_type usb_supply_type;
+	int rc, ret;
+	u8 reg;
+	int typec_current;
+	bool DCP_demo_app_flag;
+
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
+	smbchg_dev->CHG_TYPE_flag = UNDEFINED;
+
+	read_usb_type(smbchg_dev, &usb_type_name, &usb_supply_type);
+
+	printk("[BAT][CHG] ASUS detect inserted type = %d (%s)\n", usb_supply_type, usb_type_name);
+
+	typec_current = typec_CHG_TYPE_current();
+
+	if (typec_current != 500 && typec_current != 1400 && typec_current != 1910) {
+		printk("[BAT][CHG] CCOUT is open, set 500mA\n");
+		if (special_connector_flag) {
+			printk("[BAT][CHG] special_connector = 1, ignore CCOUT open\n");
+			goto special_connector;
+		} else {
+			smbchg_dev->usb_target_current_ma = Default_ELSE_500mA;
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+			smbchg_dev->CHG_TYPE_flag = ELSE;
+			smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+			goto pm_relax;
+		}
+	}
+
+	if (typec_current != 500 && usb_supply_type != POWER_SUPPLY_TYPE_USB_DCP) {
+		if (typec_current == 1400) {
+			smbchg_dev->CHG_TYPE_flag = TYPEC_1P5A; //CHG_TYPE=TYPEC_1P5A
+			smbchg_dev->usb_target_current_ma = TYPEC_1P5A_1400mA;
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+		} else if (typec_current == 1910) {
+			smbchg_dev->CHG_TYPE_flag = TYPEC_3P0A; //CHG_TYPE=TYPEC_3P0A
+			smbchg_dev->usb_target_current_ma = TYPEC_3P0A_1910mA;
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+		}
+		smbchg_jeita_start_work(smbchg_dev, 0); 	//ASUS BSP Austin_T: Jeita start
+		goto pm_relax;
+	}
+
+special_connector:
+	switch(usb_supply_type) {
+	case POWER_SUPPLY_TYPE_USB:
+		if (g_Charger_mode) {
+			smbchg_dev->usb_target_current_ma = Default_CHG_mode_500mA;
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+			smbchg_dev->CHG_TYPE_flag = SDP;
+			smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+			goto pm_relax;
+		}
+		rc = smbchg_read(smbchg_dev, &reg, smbchg_dev->usb_chgpth_base + ICL_MODE, 1);
+		if ((reg & ICL_MODE_MASK) == ICL_MODE_500mA) {
+			smbchg_dev->CHG_TYPE_flag = SDP;
+		} else {
+			if (smbchg_dev->RE_APSD_flag == 0) {
+				msleep(3000);
+				smbchg_dev->RE_APSD_flag = 1;
+				rc = rerun_apsd(smbchg_dev);
+				if (rc)
+					printk("Faild to rerun 'APSD', rc=%d\n", rc);
+				goto pm_relax;
+			}
+			smbchg_dev->CHG_TYPE_flag = FLOATING;
+			smbchg_dev->usb_target_current_ma = DEFAULT_FLOATING_500mA;
+			printk("[BAT][CHG] %s ASUS detected setting mA = %d\n", usb_type_name, smbchg_dev->usb_target_current_ma);
+			rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->usb_chgpth_base + IL_CFG, SMBCHGL_USB_USBIN_IL_CFG_MASK, USBIN_IL_500mA);
+			if (rc)
+				printk("[BAT][CHG] Failed to set 13F2 0x04 rc = %d\n", rc);
+			rc = smbchg_masked_write(smbchg_dev, smbchg_dev->usb_chgpth_base + CMD_IL,
+						USBIN_MODE_CHG_BIT, USBIN_HC_MODE);
+			if (rc < 0)
+				printk("[BAT][CHG] Couldn't write HC mode, rc = %d\n", rc);
+			rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+		}
+		smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+		break;
+	case POWER_SUPPLY_TYPE_USB_DCP:
+	case POWER_SUPPLY_TYPE_USB_HVDCP:
+	case POWER_SUPPLY_TYPE_USB_HVDCP_3:
+		smbchg_dev->EXT_RE_APSD_flag = 0;
+		if (strcmp(usb_type_name, "DCP") != 0) {
+			printk("[BAT][CHG] Not normal DCP, default 900mA ");
+			smbchg_dev->CHG_TYPE_flag = OTHERS;
+			smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+			break;
+		}
+		if (get_prop_batt_capacity(smbchg_dev) >= 1) {
+
+			ret = gpio_direction_output(global_gpio->ADCPWREN, 0);
+			if (ret) {
+				printk("[BAT][CHG] failed to pull-low ADCPWREN-gpios01\n");
+				break;
+			}
+
+			ret = gpio_direction_output(global_gpio->DPM_SW_EN, 1);
+			if (ret) {
+				printk("[BAT][CHG] failed to pull-high DPM_SW_EN-gpios134\n");
+				break;
+			}
+
+			if (factory_build_flag) {
+				printk("[BAT][CHG] factory_build, cancel ADC_WAIT_TIME\n");
+				smbchg_stay_awake(smbchg_dev, PM_ADC_JUDGE);
+				schedule_delayed_work(&asus_adapter_adc_work, 0);
+			} else {
+				printk("[BAT][CHG] NOT factory_build, ADC_WAIT_TIME = 30s \n");
+				smbchg_stay_awake(smbchg_dev, PM_ADC_JUDGE);
+				schedule_delayed_work(&asus_adapter_adc_work, msecs_to_jiffies(ADC_WAIT_TIME));
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 60% in Demo APP DCP insertion +++
+	if (demo_app_property_flag) {
+		DCP_demo_app_flag = ADF_check_status();
+		if (DCP_demo_app_flag && get_prop_batt_capacity(smbchg_dev) >= 60) {
+			rc = smbchg_sec_masked_write(smbchg_dev, smbchg_dev->bat_if_base + CMD_CHG_REG, EN_BAT_CHG_BIT,
+					EN_BAT_CHG_EN_COMMAND_FALSE);
+			if (rc < 0) {
+				printk("[BAT][CHG] Couldn't write charging_enable rc = %d\n", rc);
+			}
+			printk("[BAT][CHG] Demo APP triggered & Capacity > 60, diasble charging!\n");
+		}
+	}
+//ASUS BSP Austin_Tseng : Disable battery charging when capacity is over 60% in Demo APP DCP inserton ---
+			}
+		} else {
+			smbchg_dev->CHG_TYPE_flag = UNDEFINED;
+			smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+		}
+		break;
+	case POWER_SUPPLY_TYPE_USB_CDP:
+		smbchg_dev->CHG_TYPE_flag = CDP;
+		smbchg_dev->usb_target_current_ma = DEFAULT_CDP_MA;
+		rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+		smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+		break;
+	default:
+		smbchg_dev->CHG_TYPE_flag = OTHERS;
+		smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+		break;
+	}
+
+	smbchg_dev->RE_APSD_flag = 0;
+
+pm_relax:
+	smbchg_relax(smbchg_dev, PM_ADAPTER_JUDGE);
+}
+//ASUS BSP Austin_TSeng : Adapter judge function ---
+
+void do_boot_SDP_rerun_apsd_work(struct work_struct *work)
+{
+	printk("[BAT][CHG] do_boot_SDP_rerun_apsd_work\n");
+	rerun_apsd(smbchg_dev);
+}
+
 #define HVDCP_NOTIFY_MS		2500
 static void handle_usb_insertion(struct smbchg_chip *chip)
 {
@@ -4971,11 +6347,26 @@ static void handle_usb_insertion(struct smbchg_chip *chip)
 	int rc;
 	char *usb_type_name = "null";
 
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
 	pr_smb(PR_STATUS, "triggered\n");
+
+	usb_insertion_remove_init_setting(chip);	//ASUS BSP Austin_T : USB initials
+
+	usb_alert_flag = gpio_get_value(global_gpio->USB_TEMP_ALERT);
+
+	if (usb_alert_flag) {
+		printk("[BAT][CHG] USB insertion, usb alert, suspend charger\n");
+		rc = smbchg_masked_write(chip, chip->usb_chgpth_base + CMD_IL,
+			USBIN_SUSPEND_BIT, USBIN_SUSPEND_BIT);
+		if (rc)
+			pr_err("[BAT][CHG] Failed to set CMD_IL Register_Control, rc = %d\n", rc);
+	}
+
 	/* usb inserted */
 	read_usb_type(chip, &usb_type_name, &usb_supply_type);
 	pr_smb(PR_STATUS,
-		"inserted type = %d (%s)", usb_supply_type, usb_type_name);
+		"Qcom detect inserted type = %d (%s)", usb_supply_type, usb_type_name);
+	printk("[BAT][CHG] Qcom detect insert type = %d (%s)\n", usb_supply_type, usb_type_name);
 
 	smbchg_aicl_deglitch_wa_check(chip);
 	if (chip->typec_psy)
@@ -5014,10 +6405,40 @@ static void handle_usb_insertion(struct smbchg_chip *chip)
 		smbchg_stay_awake(chip, PM_DETECT_HVDCP);
 		schedule_delayed_work(&chip->hvdcp_det_work,
 					msecs_to_jiffies(HVDCP_NOTIFY_MS));
-		if (chip->parallel.use_parallel_aicl) {
-			reinit_completion(&chip->hvdcp_det_done);
-			pr_smb(PR_MISC, "init hvdcp_det_done\n");
-		}
+	}
+
+	if (g_Charger_mode) {
+		printk("[BAT][CHG] charger mode detect\n");
+		smbchg_stay_awake(chip, PM_ADAPTER_JUDGE);
+		schedule_delayed_work(&adapter_detect_work,
+			msecs_to_jiffies(ADAPTER_DET_MS_COS_MODE));	//ASUS BSP Austin_T: adapter detect start
+	} else if ((jiffies - probe_start_time) <= ADAPTER_DET_AFT_PROBE) {
+		printk("[BAT][CHG] boot detect\n");
+		//if (usb_supply_type == POWER_SUPPLY_TYPE_USB && boot_sdp_rerun_apsd_flag == 0) {
+		//	printk("[BAT][CHG] boot SDP/CDP rerun apsd");
+		//	boot_sdp_rerun_apsd_flag = 1;
+		//	schedule_delayed_work(&boot_SDP_rerun_apsd_work, msecs_to_jiffies(15000));
+		//	return;
+		//} else {
+		smbchg_stay_awake(chip, PM_ADAPTER_JUDGE);
+		schedule_delayed_work(&adapter_detect_work,
+			msecs_to_jiffies(ADAPTER_DET_MS_BOOT));		//ASUS BSP Austin_T: adapter detect start
+		//}
+	} else {
+		printk("[BAT][CHG] normal detect\n");
+		smbchg_stay_awake(chip, PM_ADAPTER_JUDGE);
+		schedule_delayed_work(&adapter_detect_work,
+			msecs_to_jiffies(ADAPTER_DET_MS));			//ASUS BSP Austin_T: adapter detect start
+	}
+
+	focal_usb_detection(true);	//ASUS BSP Nancy : notify touch cable in +++
+
+	if ((g_ASUS_hwID >= ZE552KL_PR && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR && g_ASUS_hwID <= ZE520KL_MP)) {
+		printk("[BAT][CHG] charger insertion, enable PRT8301\n");
+		rc = gpio_direction_output(global_gpio->ADC_VDD_EN, 1);
+		if (rc)
+			printk("[BAT][CHG] failed to pull-high ADC_VDD_EN-gpio99\n");
 	}
 
 	smbchg_detect_parallel_charger(chip);
@@ -5027,6 +6448,7 @@ static void handle_usb_insertion(struct smbchg_chip *chip)
 		rc = enable_irq_wake(chip->aicl_done_irq);
 		chip->enable_aicl_wake = true;
 	}
+	printk("[BAT][CHG] %s end\n", __FUNCTION__);
 }
 
 void update_usb_status(struct smbchg_chip *chip, bool usb_present, bool force)
@@ -5595,9 +7017,11 @@ static int rerun_apsd(struct smbchg_chip *chip)
 {
 	int rc = 0;
 
-	chip->hvdcp_3_det_ignore_uv = true;
+	printk("[BAT][CHG] rerun_apsd trigger\n");
 
-	if (chip->schg_version == QPNP_SCHG_LITE) {
+	//chip->hvdcp_3_det_ignore_uv = true;
+
+	//if (chip->schg_version == QPNP_SCHG_LITE) {
 		pr_smb(PR_STATUS, "Re-running APSD\n");
 		reinit_completion(&chip->src_det_raised);
 		reinit_completion(&chip->usbin_uv_lowered);
@@ -5640,16 +7064,16 @@ static int rerun_apsd(struct smbchg_chip *chip)
 			pr_err("wait for src detect failed rc = %d\n", rc);
 			goto out;
 		}
-	} else {
+	/*} else {
 		pr_smb(PR_STATUS, "Faking Removal\n");
 		rc = fake_insertion_removal(chip, false);
 		msleep(500);
 		pr_smb(PR_STATUS, "Faking Insertion\n");
 		rc = fake_insertion_removal(chip, true);
-	}
+	}*/
 
 out:
-	chip->hvdcp_3_det_ignore_uv = false;
+	//chip->hvdcp_3_det_ignore_uv = false;
 	return rc;
 }
 
@@ -6155,6 +7579,8 @@ static enum power_supply_property smbchg_battery_properties[] = {
 	POWER_SUPPLY_PROP_RESTRICTED_CHARGING,
 	POWER_SUPPLY_PROP_ALLOW_HVDCP3,
 	POWER_SUPPLY_PROP_MAX_PULSE_ALLOWED,
+	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
 };
 
 static int smbchg_battery_set_property(struct power_supply *psy,
@@ -6271,6 +7697,10 @@ static int smbchg_battery_is_writeable(struct power_supply *psy,
 	return rc;
 }
 
+extern int fg_get_charge_full(void);
+extern int fg_get_charge_now(void);
+extern bool fg_get_charge_full_status(void);
+
 static int smbchg_battery_get_property(struct power_supply *psy,
 				       enum power_supply_property prop,
 				       union power_supply_propval *val)
@@ -6280,6 +7710,7 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_STATUS:
+		battery_dc_property = 1;
 		val->intval = get_prop_batt_status(chip);
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
@@ -6335,6 +7766,9 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		val->intval = get_prop_batt_current_now(chip);
+		if (fg_get_charge_full_status() && val->intval > -5000 && val->intval < 5000) {
+			val->intval = 0;
+		}
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = get_prop_batt_voltage_now(chip);
@@ -6342,9 +7776,9 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_RESISTANCE_ID:
 		val->intval = get_prop_batt_resistance_id(chip);
 		break;
-	case POWER_SUPPLY_PROP_CHARGE_FULL:
+	/*case POWER_SUPPLY_PROP_CHARGE_FULL:
 		val->intval = get_prop_batt_full_charge(chip);
-		break;
+		break;*/
 	case POWER_SUPPLY_PROP_TEMP:
 		val->intval = get_prop_batt_temp(chip);
 		break;
@@ -6380,6 +7814,14 @@ static int smbchg_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_MAX_PULSE_ALLOWED:
 		val->intval = chip->max_pulse_allowed;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		val->intval = fg_get_charge_full();
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
+		val->intval = fg_get_charge_full();
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		val->intval = fg_get_charge_now();
 		break;
 	default:
 		return -EINVAL;
@@ -6442,6 +7884,7 @@ static int smbchg_dc_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		/* return if dc is charging the battery */
+		battery_dc_property = 1;
 		val->intval = (smbchg_get_pwr_path(chip) == PWR_PATH_DC)
 				&& (get_prop_batt_status(chip)
 					== POWER_SUPPLY_STATUS_CHARGING);
@@ -6485,6 +7928,13 @@ static irqreturn_t batt_hot_handler(int irq, void *_chip)
 {
 	struct smbchg_chip *chip = _chip;
 	u8 reg = 0;
+	int temp;
+
+	if (stop_thermal_flag)
+		return IRQ_HANDLED;
+
+	temp = get_prop_batt_temp(_chip);
+	printk("[BAT][CHG] %s start, temp = %d\n", __FUNCTION__, temp);
 
 	smbchg_read(chip, &reg, chip->bat_if_base + RT_STS, 1);
 	chip->batt_hot = !!(reg & HOT_BAT_HARD_BIT);
@@ -6503,6 +7953,13 @@ static irqreturn_t batt_cold_handler(int irq, void *_chip)
 {
 	struct smbchg_chip *chip = _chip;
 	u8 reg = 0;
+	int temp;
+
+	if (stop_thermal_flag)
+		return IRQ_HANDLED;
+
+	temp = get_prop_batt_temp(_chip);
+	printk("[BAT][CHG] %s start, temp = %d\n", __FUNCTION__, temp);
 
 	smbchg_read(chip, &reg, chip->bat_if_base + RT_STS, 1);
 	chip->batt_cold = !!(reg & COLD_BAT_HARD_BIT);
@@ -6521,6 +7978,10 @@ static irqreturn_t batt_warm_handler(int irq, void *_chip)
 {
 	struct smbchg_chip *chip = _chip;
 	u8 reg = 0;
+	int temp;
+
+	temp = get_prop_batt_temp(_chip);
+	printk("[BAT][CHG] %s start, temp = %d\n", __FUNCTION__, temp);
 
 	smbchg_read(chip, &reg, chip->bat_if_base + RT_STS, 1);
 	chip->batt_warm = !!(reg & HOT_BAT_SOFT_BIT);
@@ -6537,6 +7998,11 @@ static irqreturn_t batt_cool_handler(int irq, void *_chip)
 {
 	struct smbchg_chip *chip = _chip;
 	u8 reg = 0;
+	int temp;
+
+	temp = get_prop_batt_temp(_chip);
+	printk("[BAT][CHG] %s start, temp = %d\n", __FUNCTION__, temp);
+
 
 	smbchg_read(chip, &reg, chip->bat_if_base + RT_STS, 1);
 	chip->batt_cool = !!(reg & COLD_BAT_SOFT_BIT);
@@ -6629,6 +8095,7 @@ static irqreturn_t chg_term_handler(int irq, void *_chip)
 	struct smbchg_chip *chip = _chip;
 
 	pr_smb(PR_INTERRUPT, "tcc triggered\n");
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
 	/*
 	 * Charge termination is a pulse and not level triggered. That means,
 	 * TCC bit in RT_STS can get cleared by the time this interrupt is
@@ -6786,6 +8253,8 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 	int rc;
 	u8 reg;
 
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
 	rc = smbchg_read(chip, &reg, chip->usb_chgpth_base + RT_STS, 1);
 	if (rc) {
 		pr_err("could not read rt sts: %d", rc);
@@ -6794,6 +8263,10 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 
 	pr_smb(PR_STATUS,
 		"%s chip->usb_present = %d rt_sts = 0x%02x hvdcp_3_det_ignore_uv = %d aicl = %d\n",
+		chip->hvdcp_3_det_ignore_uv ? "Ignoring":"",
+		chip->usb_present, reg, chip->hvdcp_3_det_ignore_uv,
+		aicl_level);
+	printk("[BAT][CHG] usbin_uv_handler: %s chip->usb_present = %d rt_sts = 0x%02x hvdcp_3_det_ignore_uv = %d aicl = %d\n",
 		chip->hvdcp_3_det_ignore_uv ? "Ignoring":"",
 		chip->usb_present, reg, chip->hvdcp_3_det_ignore_uv,
 		aicl_level);
@@ -6828,13 +8301,18 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 			goto out;
 		}
 		if ((reg & ICL_MODE_MASK) != ICL_MODE_HIGH_CURRENT) {
+			printk("[BAT][CHG] usbin_uv_handler ICL_MODE, reg = 0x%xh\n", (reg & ICL_MODE_MASK));
+			if ((jiffies - old_VWC_time) >= 5000) {
+				ASUSEvtlog("[BAT][CHG] usbin_uv_handler: very_weak_charger to suspend, SMBCHGL_USB_ICL_STS_2 = 0x%xh\n", (reg & ICL_MODE_MASK));
+				old_VWC_time = jiffies;
+			}
 			/*
 			 * If AICL is not even enabled, this is either an
 			 * SDP or a grossly out of spec charger. Do not
 			 * draw any current from it.
 			 */
 			rc = vote(chip->usb_suspend_votable,
-					WEAK_CHARGER_EN_VOTER, true, 0);
+					WEAK_CHARGER_EN_VOTER, false, 0);	//true->false:This is a workaround for monkey_suspend
 			if (rc < 0)
 				pr_err("could not disable charger: %d", rc);
 		} else if (aicl_level == chip->tables.usb_ilim_ma_table[0]) {
@@ -6877,6 +8355,8 @@ static irqreturn_t src_detect_handler(int irq, void *_chip)
 	bool src_detect = is_src_detect_high(chip);
 	int rc;
 
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
 	pr_smb(PR_STATUS,
 		"%s chip->usb_present = %d usb_present = %d src_detect = %d hvdcp_3_det_ignore_uv=%d\n",
 		chip->hvdcp_3_det_ignore_uv ? "Ignoring":"",
@@ -6906,7 +8386,7 @@ static irqreturn_t src_detect_handler(int irq, void *_chip)
 	 * vote for enable aicl hw reruns
 	 */
 	rc = vote(chip->hw_aicl_rerun_disable_votable,
-		WEAK_CHARGER_HW_AICL_VOTER, false, 0);
+		WEAK_CHARGER_HW_AICL_VOTER, true, 0);		//ASUS Austin_T : false >> true
 	if (rc < 0)
 		pr_err("Couldn't enable hw aicl rerun rc=%d\n", rc);
 
@@ -7131,6 +8611,9 @@ static inline int get_bpd(const char *name)
 #define TR_8OR32B			0xFE
 #define BUCK_8_16_FREQ_BIT		BIT(0)
 #define BM_CFG				0xF3
+#define CFG_SYSMIN 			0xF4				//BSP Austin_T
+#define CFG_SYSMIN_MASK		SMB_MASK(1, 0)		//BSp Austin_T
+#define CFG_SYSMIN_3P6		0x02				//BSP Austin_T
 #define BATT_MISSING_ALGO_BIT		BIT(2)
 #define BMD_PIN_SRC_MASK		SMB_MASK(1, 0)
 #define PIN_SRC_SHIFT			0
@@ -7152,11 +8635,14 @@ static inline int get_bpd(const char *name)
 #define CMD_APSD			0x41
 #define APSD_RERUN_BIT			BIT(0)
 #define OTG_CFG				0xF1
+#define OTG_ICFG			0xF3
 #define HICCUP_ENABLED_BIT		BIT(6)
 #define OTG_PIN_POLARITY_BIT		BIT(4)
 #define OTG_PIN_ACTIVE_LOW		BIT(4)
 #define OTG_EN_CTRL_MASK		SMB_MASK(3, 2)
-#define OTG_PIN_CTRL_RID_DIS		0x04
+#define OTG_ILIMIT_MASK			SMB_MASK(1, 0)
+#define OTG_ILIMIT_600MA		0x01
+#define OTG_PIN_CTRL_RID_DIS	0x04
 #define OTG_CMD_CTRL_RID_EN		0x08
 #define AICL_ADC_BIT			BIT(6)
 static void batt_ov_wa_check(struct smbchg_chip *chip)
@@ -7319,13 +8805,18 @@ static int smbchg_hw_init(struct smbchg_chip *chip)
 	 * adc for recharge threshold source.
 	 */
 
-	if (chip->chg_inhibit_source_fg)
+	/*if (chip->chg_inhibit_source_fg)
 		rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG1,
 			TERM_I_SRC_BIT | RECHG_THRESHOLD_SRC_BIT,
 			TERM_SRC_FG | RECHG_THRESHOLD_SRC_BIT);
 	else
 		rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG1,
-			TERM_I_SRC_BIT | RECHG_THRESHOLD_SRC_BIT, 0);
+			TERM_I_SRC_BIT | RECHG_THRESHOLD_SRC_BIT, 0);*/
+
+//ASUS BSP Austin_T : Set TEWM_I_SRC FG & RECHG_THRESHOLD_SRC Analog +++
+		rc = smbchg_sec_masked_write(chip, chip->chgr_base + CHGR_CFG1,
+			TERM_I_SRC_BIT | RECHG_THRESHOLD_SRC_BIT,
+			TERM_SRC_FG | 0);
 
 	if (rc < 0) {
 		dev_err(chip->dev, "Couldn't set chgr_cfg2 rc=%d\n", rc);
@@ -7604,6 +9095,19 @@ static int smbchg_hw_init(struct smbchg_chip *chip)
 				rc);
 	}
 
+//ASUS BSP Austin_T : otg_pinctrl set HIGH +++
+	if (!chip->otg_pinctrl) {
+		/* configure OTG enable to pin control active high */
+		rc = smbchg_sec_masked_write(chip, chip->otg_base + OTG_CFG,
+				OTG_EN_CTRL_MASK, OTG_CMD_CTRL_RID_EN);
+		if (rc < 0) {
+			dev_err(chip->dev, "Couldn't set OTG EN config rc = %d\n",
+				rc);
+			return rc;
+		}
+	}
+//ASUS BSP Austin_T : otg_pinctrl set HIGH ---
+
 	if (chip->otg_pinctrl) {
 		/* configure OTG enable to pin control active low */
 		rc = smbchg_sec_masked_write(chip, chip->otg_base + OTG_CFG,
@@ -7615,6 +9119,16 @@ static int smbchg_hw_init(struct smbchg_chip *chip)
 			return rc;
 		}
 	}
+//ASUS BSP Austin_T : set OTG_ICFG +++
+
+	rc = smbchg_sec_masked_write(chip, chip->otg_base + OTG_ICFG,
+					OTG_ILIMIT_MASK, OTG_ILIMIT_600MA);
+			if (rc < 0) {
+				dev_err(chip->dev, "Couldn't set OTG EN config rc = %d\n",
+					rc);
+				return rc;
+			}
+//ASUS BSP Austin_T : set OTG_ICFG ---
 
 	if (chip->wa_flags & SMBCHG_BATT_OV_WA)
 		batt_ov_wa_check(chip);
@@ -7756,7 +9270,8 @@ err:
 }
 
 #define DEFAULT_VLED_MAX_UV		3500000
-#define DEFAULT_FCC_MA			2000
+#define DEFAULT_FCC_MA			700		//2000 >> 700
+#define LEO_DEFAULT_FCC_MA		650
 static int smb_parse_dt(struct smbchg_chip *chip)
 {
 	int rc = 0, ocp_thresh = -EINVAL;
@@ -7773,11 +9288,19 @@ static int smb_parse_dt(struct smbchg_chip *chip)
 			"ibat-ocp-threshold-ua", rc, 1);
 	if (ocp_thresh >= 0)
 		smbchg_ibat_ocp_threshold_ua = ocp_thresh;
-	OF_PROP_READ(chip, chip->iterm_ma, "iterm-ma", rc, 1);
+	if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+		OF_PROP_READ(chip, chip->iterm_ma, "iterm-ma-leo", rc, 1);
+	else
+		OF_PROP_READ(chip, chip->iterm_ma, "iterm-ma", rc, 1);
+
 	OF_PROP_READ(chip, chip->cfg_fastchg_current_ma,
 			"fastchg-current-ma", rc, 1);
-	if (chip->cfg_fastchg_current_ma == -EINVAL)
-		chip->cfg_fastchg_current_ma = DEFAULT_FCC_MA;
+	if (chip->cfg_fastchg_current_ma == -EINVAL) {
+		if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID <= ZE520KL_MP)
+			chip->cfg_fastchg_current_ma = LEO_DEFAULT_FCC_MA;
+		else
+			chip->cfg_fastchg_current_ma = DEFAULT_FCC_MA;
+	}
 	OF_PROP_READ(chip, chip->vfloat_mv, "float-voltage-mv", rc, 1);
 	OF_PROP_READ(chip, chip->safety_time, "charging-timeout-mins", rc, 1);
 	OF_PROP_READ(chip, chip->vled_max_uv, "vled-max-uv", rc, 1);
@@ -8226,6 +9749,15 @@ static int smbchg_parse_peripherals(struct smbchg_chip *chip)
 	return rc;
 }
 
+static inline void uartlog_dump_reg(struct smbchg_chip *chip, u16 addr,
+		const char *name)
+{
+	u8 reg;
+
+	smbchg_read(chip, &reg, addr, 1);
+	printk("[BAT][CHG] %s - %04X = %02X\n", name, addr, reg);
+}
+
 static inline void dump_reg(struct smbchg_chip *chip, u16 addr,
 		const char *name)
 {
@@ -8236,6 +9768,64 @@ static inline void dump_reg(struct smbchg_chip *chip, u16 addr,
 }
 
 /* dumps useful registers for debug */
+static void uartlog_dump_regs(struct smbchg_chip *chip)
+{
+	u16 addr;
+
+	// charger peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->chgr_base + addr, "CHGR Config");
+	// otg peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->otg_base + addr, "OTG Config");
+	// battery interface peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->bat_if_base + addr, "BAT_IF Config");
+	// usb charge path peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->usb_chgpth_base + addr, "USB Config");
+	// dc charge path peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->dc_chgpth_base + addr, "DC Config");
+	// misc peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->misc_base + addr, "MISC CFG");
+}
+
+/*static void uartlog_dump_regs(struct smbchg_chip *chip)
+{
+	u16 addr;
+
+	// charger peripheral
+	for (addr = 0xB; addr <= 0x10; addr++)
+		uartlog_dump_reg(chip, chip->chgr_base + addr, "CHGR Status");
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->chgr_base + addr, "CHGR Config");
+	// otg peripheral
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->otg_base + addr, "OTG Config");
+	// battery interface peripheral
+	uartlog_dump_reg(chip, chip->bat_if_base + RT_STS, "BAT_IF Status");
+	uartlog_dump_reg(chip, chip->bat_if_base + CMD_CHG_REG, "BAT_IF Command");
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->bat_if_base + addr, "BAT_IF Config");
+	// usb charge path peripheral
+	for (addr = 0x7; addr <= 0x10; addr++)
+		uartlog_dump_reg(chip, chip->usb_chgpth_base + addr, "USB Status");
+	uartlog_dump_reg(chip, chip->usb_chgpth_base + CMD_IL, "USB Command");
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->usb_chgpth_base + addr, "USB Config");
+	// dc charge path peripheral
+	uartlog_dump_reg(chip, chip->dc_chgpth_base + RT_STS, "DC Status");
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->dc_chgpth_base + addr, "DC Config");
+	// misc peripheral
+	uartlog_dump_reg(chip, chip->misc_base + IDEV_STS, "MISC Status");
+	uartlog_dump_reg(chip, chip->misc_base + RT_STS, "MISC Status");
+	for (addr = 0xF0; addr <= 0xFF; addr++)
+		uartlog_dump_reg(chip, chip->misc_base + addr, "MISC CFG");
+}*/
+
 static void dump_regs(struct smbchg_chip *chip)
 {
 	u16 addr;
@@ -8340,8 +9930,8 @@ static int smbchg_check_chg_version(struct smbchg_chip *chip)
 
 		chip->schg_version = QPNP_SCHG_LITE;
 		/* PMI8937/PMI8940 doesn't support HVDCP */
-		if ((pmic_rev_id->pmic_subtype == PMI8937)
-			|| (pmic_rev_id->pmic_subtype == PMI8940))
+		//if ((pmic_rev_id->pmic_subtype == PMI8937)
+		//	|| (pmic_rev_id->pmic_subtype == PMI8940))
 			chip->hvdcp_not_supported = true;
 		break;
 	case PMI8996:
@@ -8413,14 +10003,706 @@ static void rerun_hvdcp_det_if_necessary(struct smbchg_chip *chip)
 	}
 }
 
+/*+++BSP Austin_T Interface for thermal test+++*/
+/*#define	thermal_table_params_PROC_FILE	"driver/thermal_table_params"
+static struct proc_dir_entry *thermal_table_params_proc_file;
+static ssize_t thermal_table_params_proc_write(struct file *filp, const char __user *src,
+		size_t len, loff_t *data){
+
+	char buf[MAX_BUF_SIZE];
+	char *pch, *str = buf, *delim="\n\0";
+
+	if(copy_from_user(buf, src, len)){
+		printk("[%s] %s: command fail!!\n", CHARGER_TAG, __func__);
+		return -EFAULT;
+	}
+
+	pch = strsep(&str, delim);
+
+	pch[strlen(pch)] = '\n';
+
+	printk("[BAT][CHG] pch = %s\n", pch);
+
+	t2l_table_update_sample(pch);
+
+	thermal_level_control(smbchg_dev);
+
+	return len;
+}
+
+static const struct file_operations thermal_table_params_fops = {
+	.owner = THIS_MODULE,
+	.write = thermal_table_params_proc_write,
+};
+void static create_thermal_table_params_proc_file(void)
+{
+	thermal_table_params_proc_file = proc_create(thermal_table_params_PROC_FILE, 0644, NULL, &thermal_table_params_fops);
+
+	if (thermal_table_params_proc_file) {
+		printk("[Proc]%s sucessed!\n", __FUNCTION__);
+	} else{
+		printk("[Proc]%s failed!\n", __FUNCTION__);
+	}
+}*/
+/*---BSP Austin_T Interface for thermal test---*/
+
+/*+++BSP Austin_T BMMI Adb Interface+++*/
+#define	chargerIC_status_PROC_FILE	"driver/chargerIC_status"
+static struct proc_dir_entry *chargerIC_status_proc_file;
+static int chargerIC_status_proc_read(struct seq_file *buf, void *v)
+{
+	int ret = -1;
+	u8 reg;
+	ret = smbchg_read(smbchg_dev, &reg, smbchg_dev->chgr_base + 0xB, 1);
+	if (ret) {
+		ret = 0;
+	} else{
+		ret = 1;
+	}
+	seq_printf(buf, "%d\n", ret);
+	return 0;
+}
+static int chargerIC_status_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, chargerIC_status_proc_read, NULL);
+}
+
+static const struct file_operations chargerIC_status_fops = {
+	.owner = THIS_MODULE,
+	.open = chargerIC_status_proc_open,
+	.read = seq_read,
+	.release = single_release,
+};
+void static create_chargerIC_status_proc_file(void)
+{
+	chargerIC_status_proc_file = proc_create(chargerIC_status_PROC_FILE, 0644, NULL, &chargerIC_status_fops);
+
+	if (chargerIC_status_proc_file) {
+		printk("[Proc]%s sucessed!\n", __FUNCTION__);
+	} else{
+		printk("[Proc]%s failed!\n", __FUNCTION__);
+	}
+}
+/*---BSP Austin_T BMMI Adb Interface---*/
+
+/*+++BSP Austin_T proc charger_limit_enable Interface+++*/
+/*#define	charger_limit_enable_PROC_FILE	"driver/charger_limit_enable"
+static struct proc_dir_entry *charger_limit_enable_proc_file;
+static int charger_limit_enable_proc_read(struct seq_file *buf, void *v)
+{
+	if (en_charging_limit) {
+		seq_printf(buf, "charging limit enable\n");
+	} else{
+		seq_printf(buf, "charging limit disable\n");
+	}
+	return 0;
+}
+
+static ssize_t charger_limit_enable_proc_write(struct file *filp, const char __user *buff,
+		size_t len, loff_t *data)
+{
+	char messages[256];
+
+	printk("[BAT][CHG] charger_limit_enable_proc_write\n");
+	if (len > 256) {
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) {
+		return -EFAULT;
+	}
+
+	if (factory_build_flag == 0) {
+		printk("[BAT][CHG] NOT factory_build, write charger_limit_enable is not permitted");
+		return -EPERM;
+	}
+
+	if (buff[0] == '1') {
+		en_charging_limit = true;
+		// turn on charging limit in eng mode
+		printk("[BAT][CHG][SMB][Proc]charger_limit_enable:%d\n", 1);
+	} else if (buff[0] == '0') {
+		en_charging_limit = false;
+		// turn off charging limit in eng mode
+		printk("[BAT][CHG][SMB][Proc]charger_limit_enable:%d\n", 0);
+	}
+
+	if (is_smbchg_charging(smbchg_dev)) {
+		smbchg_jeita_start_work(smbchg_dev, 0);
+	}
+
+	return len;
+}
+
+static int charger_limit_enable_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, charger_limit_enable_proc_read, NULL);
+}
+
+static const struct file_operations charger_limit_enable_fops = {
+	.owner = THIS_MODULE,
+	.open =  charger_limit_enable_proc_open,
+	.write = charger_limit_enable_proc_write,
+	.read = seq_read,
+	.release = single_release,
+};
+
+static void create_charger_limit_enable_proc_file(void)
+{
+	charger_limit_enable_proc_file = proc_create(charger_limit_enable_PROC_FILE, 0777, NULL, &charger_limit_enable_fops);
+
+	if (charger_limit_enable_proc_file) {
+		printk("[BAT][CHG][SMB][Proc]charger_limit_enable create ok!\n");
+	} else {
+		printk("[BAT][CHG][SMB][Proc]charger_limit_enable create failed!\n");
+	}
+}*/
+/*---BSP Austin_T proc charger_limit_enable Interface---*/
+
+//[+++] Create a file for SMMI adb interface (Capacity, Current, Voltag)
+//(1) Support the Capacity readging for SMMI
+/*#define	battery_capacity_PROC_FILE	"driver/batt_SOC"
+static struct proc_dir_entry *battery_capacity_proc_file;
+static int battery_capacity_proc_read(struct seq_file *buf, void *v)
+{
+	int bat_soc = -1;
+	bat_soc = get_prop_batt_capacity(smbchg_dev);
+	if (bat_soc < 0)
+		pr_err("[BAT][Gauge][Err]%s: failed to read batter capacity\n", __FUNCTION__);
+	seq_printf(buf, "%d\n", bat_soc);
+	return 0;
+}
+static int battery_capacity_proc_open(struct inode *inode, struct  file *file)
+{
+	return single_open(file, battery_capacity_proc_read, NULL);
+}
+static ssize_t battery_capacity_proc_write(struct file *filp, const char __user *buff,
+		size_t len, loff_t *data)
+{
+	int val;
+
+	char messages[256];
+
+	if (len > 256) {
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) {
+		return -EFAULT;
+	}
+
+	val = (int)simple_strtol(messages, NULL, 10);
+	printk("[BAT][Gauge]battery SoC Proc File write: %d\n", val);
+
+	return len;
+}
+
+static const struct file_operations battery_capacity_fops = {
+	.owner = THIS_MODULE,
+	.open = battery_capacity_proc_open,
+	.write = battery_capacity_proc_write,
+	.read = seq_read,
+	.release = single_release,
+};
+void static create_battery_capacity_proc_file(void)
+{
+	battery_capacity_proc_file = proc_create(battery_capacity_PROC_FILE, 0644, NULL, &battery_capacity_fops);
+
+	if (battery_capacity_proc_file) {
+		printk("[BAT][Gauge]SoC Proc file create sucessed!\n");
+	} else{
+		printk("[BAT][Gauge]SoC Proc file create failed!\n");
+	}
+}*/
+//(2) Support the battery Voltage readging for SMMI
+/*#define	battery_voltage_PROC_FILE	"driver/batt_voltage"
+static struct proc_dir_entry *battery_voltage_proc_file;
+static int battery_voltage_proc_read(struct seq_file *buf, void *v)
+{
+	int bat_voltage = -1;
+	bat_voltage = get_prop_batt_voltage_now(smbchg_dev)/1000; 
+	if (bat_voltage < 0)
+		pr_err("[BAT][Gauge][Err]%s: failed to read batter voltage\n", __FUNCTION__);
+	seq_printf(buf, "%d\n", bat_voltage);
+	return 0;
+}
+static int battery_voltage_proc_open(struct inode *inode, struct  file *file)
+{
+	return single_open(file, battery_voltage_proc_read, NULL);
+}
+static ssize_t battery_voltage_proc_write(struct file *filp, const char __user *buff,
+		size_t len, loff_t *data)
+{
+	int val;
+
+	char messages[256];
+
+	if (len > 256) {
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) {
+		return -EFAULT;
+	}
+
+	val = (int)simple_strtol(messages, NULL, 10);
+	printk("[BAT][Gauge]battery Voltage Proc File write: %d\n", val);
+
+	return len;
+}
+
+static const struct file_operations battery_voltage_fops = {
+	.owner = THIS_MODULE,
+	.open = battery_voltage_proc_open,
+	.write = battery_voltage_proc_write,
+	.read = seq_read,
+	.release = single_release,
+};
+void static create_battery_voltage_proc_file(void)
+{
+	battery_voltage_proc_file = proc_create(battery_voltage_PROC_FILE, 0644, NULL, &battery_voltage_fops);
+
+	if (battery_voltage_proc_file) {
+		printk("[BAT][Gauge]Voltage Proc file create sucessed!\n");
+	} else{
+		printk("[BAT][Gauge]Voltage Proc file create failed!\n");
+	}
+}*/
+//(3) Support the battery Current readging for SMMI
+/*#define	battery_current_PROC_FILE	"driver/batt_current"
+static struct proc_dir_entry *battery_current_proc_file;
+static int battery_current_proc_read(struct seq_file *buf, void *v)
+{
+	int bat_current = -1;
+	bat_current = (-1)*(get_prop_batt_current_now(smbchg_dev)/1000); 
+	if (bat_current < 0)
+		pr_err("[BAT][Gauge][Err]%s: failed to read batter current\n", __FUNCTION__);
+	seq_printf(buf, "%d\n", bat_current);
+	return 0;
+}
+static int battery_current_proc_open(struct inode *inode, struct  file *file)
+{
+	return single_open(file, battery_current_proc_read, NULL);
+}
+static ssize_t battery_current_proc_write(struct file *filp, const char __user *buff,
+		size_t len, loff_t *data)
+{
+	int val;
+
+	char messages[256];
+
+	if (len > 256) {
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) {
+		return -EFAULT;
+	}
+
+	val = (int)simple_strtol(messages, NULL, 10);
+	printk("[BAT][Gauge]battery Current Proc File write: %d\n", val);
+
+	return len;
+}
+
+static const struct file_operations battery_current_fops = {
+	.owner = THIS_MODULE,
+	.open = battery_current_proc_open,
+	.write = battery_current_proc_write,
+	.read = seq_read,
+	.release = single_release,
+};
+void static create_battery_current_proc_file(void)
+{
+	battery_current_proc_file = proc_create(battery_current_PROC_FILE, 0644, NULL, &battery_current_fops);
+
+	if (battery_current_proc_file) {
+		printk("[BAT][Gauge]Current Proc file create sucessed!\n");
+	} else{
+		printk("[BAT][Gauge]Current Proc file create failed!\n");
+	}
+}*/
+//(4) Support the battery FCC readging for SMMI
+/*#define	battery_FCC_PROC_FILE	"driver/battID_cmp"
+static struct proc_dir_entry *battery_FCC_proc_file;
+static int battery_FCC_proc_read(struct seq_file *buf, void *v)
+{
+	int bat_FCC = -1;
+	bat_FCC = 3000;//Doesn't get the batt, give a fake value 
+	if (bat_FCC < 0)
+		pr_err("[BAT][Gauge][Err]%s: failed to read batter FCC\n", __FUNCTION__);
+	seq_printf(buf, "%d\n", bat_FCC);
+	return 0;
+}
+static int battery_FCC_proc_open(struct inode *inode, struct  file *file)
+{
+	return single_open(file, battery_FCC_proc_read, NULL);
+}
+static ssize_t battery_FCC_proc_write(struct file *filp, const char __user *buff,
+		size_t len, loff_t *data)
+{
+	int val;
+
+	char messages[256];
+
+	if (len > 256) {
+		len = 256;
+	}
+
+	if (copy_from_user(messages, buff, len)) {
+		return -EFAULT;
+	}
+
+	val = (int)simple_strtol(messages, NULL, 10);
+	printk("[BAT][Gauge]battery FCC Proc File write: %d\n", val);
+
+	return len;
+}
+
+static const struct file_operations battery_FCC_fops = {
+	.owner = THIS_MODULE,
+	.open = battery_FCC_proc_open,
+	.write = battery_FCC_proc_write,
+	.read = seq_read,
+	.release = single_release,
+};
+void static create_battery_FCC_proc_file(void)
+{
+	battery_FCC_proc_file = proc_create(battery_FCC_PROC_FILE, 0644, NULL, &battery_FCC_fops);
+
+	if (battery_FCC_proc_file) {
+		printk("[BAT][Gauge]battery FCC Proc file create sucessed!\n");
+	} else{
+		printk("[BAT][Gauge]battery FCC Proc file create failed!\n");
+	}
+}*/
+//[---] Create a file for SMMI adb interface (Capacity, Current, Voltag)
+
+//ASUS BSP Austin_Tseng : Add ASUSEvtlog info +++
+int CHG_TYPE_file(void)
+{
+	int charging_current;
+
+	charging_current = smbchg_dev->CHG_TYPE_flag;
+	return charging_current;
+}
+//ASUS BSP Austin_Tseng : Add ASUSEvtlog info +++
+
+EXPORT_SYMBOL(CHG_TYPE_file);
+
+//ASUS BSP Austin_Tseng : Add ASUS Adapter Detecting +++
+extern bool ads1013_ready;
+extern u16 ads1013_dump_value(void);
+extern bool us5587_ready;
+extern u8 us5587_dump_value(void);
+
+static void ads1013_CHG_TYPE_judge(struct smbchg_chip *chip)
+{
+	u16 adc_result;
+	u16 ADS1013_2V;
+	int ret;
+
+	adc_result = ads1013_dump_value();
+
+	if (adc_result <= 0x2600) {
+		ret = gpio_direction_output(global_gpio->ADCPWREN, 1);
+		if (ret) {
+			printk("[BAT][CHG] failed to pull-high ADCPWREN-gpios01\n");
+		}
+		msleep(5);
+
+		adc_result = ads1013_dump_value();
+		AIN2_Value = adc_result;
+
+		switch (g_ASUS_hwID) {
+		case ZE552KL_SR1:
+		case ZE552KL_SR2:
+		case ZE520KL_SR1:
+		case ZE520KL_SR2:
+			ADS1013_2V = 0x44C0;
+			break;
+		default:
+			ADS1013_2V = 0x7D00;
+			break;
+		}
+
+		if (adc_result >= ADS1013_2V) {
+			if (BR_countrycode_flag)
+				chip->CHG_TYPE_flag = DCP_2A;
+			else
+				chip->CHG_TYPE_flag = DCP_1A;
+		} else if (adc_result >= 0x59F0 && adc_result <= 0x6670)
+			chip->CHG_TYPE_flag = ASUS_750K;
+		else if (adc_result >= 0x2620 && adc_result <= 0x32A0)
+			chip->CHG_TYPE_flag = ASUS_200K;
+		else if (adc_result >= 0x3EE0 && adc_result <= 0x4B60)
+			chip->CHG_TYPE_flag = RESERVE_390_1A;
+		else if (adc_result >= 0x1350 && adc_result <= 0x1FD0)
+			chip->CHG_TYPE_flag = RESERVE_100_1A;
+		else 
+			chip->CHG_TYPE_flag = DCP_1A;
+	} else {
+		if (adc_result >= 0x7080)
+			chip->CHG_TYPE_flag = PB_2A;
+		else
+			chip->CHG_TYPE_flag = DCP_1A;
+	}
+}
+
+static void us5587_CHG_TYPE_judge(struct smbchg_chip *chip)
+{
+	u8 adc_result;
+	int ret;
+
+	adc_result = us5587_dump_value();
+
+	if (adc_result <= 0x3F) {
+		ret = gpio_direction_output(global_gpio->ADCPWREN, 1);
+		if (ret) {
+			printk("[BAT][CHG] failed to pull-high ADCPWREN-gpios01\n");
+		}
+		msleep(5);
+
+		adc_result = us5587_dump_value();
+		AIN2_Value = adc_result;
+
+		if (adc_result >= 0xD4) {
+			if (BR_countrycode_flag)
+				chip->CHG_TYPE_flag = DCP_2A;
+			else
+				chip->CHG_TYPE_flag = DCP_1A;
+		} else if (adc_result >= 0x9E && adc_result <= 0xB3)
+			chip->CHG_TYPE_flag = ASUS_750K;
+		else if (adc_result >= 0x41 && adc_result <= 0x57)
+			chip->CHG_TYPE_flag = ASUS_200K;
+		else if (adc_result >= 0x6D && adc_result <= 0x82)
+			chip->CHG_TYPE_flag = RESERVE_390_1A;
+		else if (adc_result >= 0x21 && adc_result <= 0x36)
+			chip->CHG_TYPE_flag = RESERVE_100_1A;
+		else
+			chip->CHG_TYPE_flag = DCP_1A;
+	} else {
+		if (adc_result >= 0xBE)
+			chip->CHG_TYPE_flag = PB_2A;
+		else
+			chip->CHG_TYPE_flag = DCP_1A;
+	}
+}
+
+void asus_adapter_adc_judge_work(struct work_struct *work)
+{
+	int ret, rc;
+	int typec_current;
+
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
+	if ((ads1013_ready != 1) && (us5587_ready != 1)) {
+		smbchg_dev->CHG_TYPE_flag = ADC_NOT_READY_1A;
+		goto set_current;
+	}
+
+	rc = smbchg_masked_write(smbchg_dev, smbchg_dev->usb_chgpth_base + CMD_IL,
+			USBIN_SUSPEND_BIT, USBIN_SUSPEND_BIT);
+	if (rc < 0)
+		printk("[BAT][CHG] Couldn't set 1340_USBIN_SUSPEND_BIT rc=%d\n", rc);
+
+	msleep(5);
+
+	if (ads1013_ready == 1) {
+		ads1013_CHG_TYPE_judge(smbchg_dev);
+	} else {
+		us5587_CHG_TYPE_judge(smbchg_dev);
+	}
+
+set_current:
+	if (smbchg_dev->CHG_TYPE_flag == PB_2A || smbchg_dev->CHG_TYPE_flag == DCP_2A || smbchg_dev->CHG_TYPE_flag == ASUS_750K || smbchg_dev->CHG_TYPE_flag == ASUS_200K) {
+		smbchg_dev->usb_target_current_ma = DEFAULT_DCP_2A; //CHG_TYPE=DCP_2A
+	} else if (smbchg_dev->CHG_TYPE_flag == DCP_1A || smbchg_dev->CHG_TYPE_flag == RESERVE_390_1A || 
+				smbchg_dev->CHG_TYPE_flag == RESERVE_100_1A || smbchg_dev->CHG_TYPE_flag == ADC_NOT_READY_1A) {
+		typec_current = typec_CHG_TYPE_current();
+		if (typec_current == 1400) {
+			smbchg_dev->CHG_TYPE_flag = TYPEC_1P5A;	//CHG_TYPE=TYPEC_1P5A
+			smbchg_dev->usb_target_current_ma = TYPEC_1P5A_1400mA; 
+		} else if (typec_current == 1910) {
+			smbchg_dev->CHG_TYPE_flag = TYPEC_3P0A;	//CHG_TYPE=TYPEC_3P0A
+			smbchg_dev->usb_target_current_ma = TYPEC_3P0A_1910mA;
+		} else {
+			smbchg_dev->usb_target_current_ma = DEFAULT_DCP_1A; //CHG_TYPE=DCP_1A
+		}
+	}
+
+	printk("[BAT][CHG] ASUS CHG_TYPE_flag detected =%d, setting mA = %d\n", smbchg_dev->CHG_TYPE_flag, smbchg_dev->usb_target_current_ma);
+
+	rc = smbchg_set_usb_current_max(smbchg_dev, smbchg_dev->usb_target_current_ma);
+
+	if (usb_alert_flag && is_smbchg_charging(smbchg_dev)) {
+		printk("[BAT][CHG] USB alert triggered, adc_judge not enable charging\n");
+	} else {
+		rc = smbchg_masked_write(smbchg_dev, smbchg_dev->usb_chgpth_base + CMD_IL, USBIN_SUSPEND_BIT, 0);
+		if (rc < 0)
+			printk("[BAT][CHG] Couldn't set 1340_USBIN_SUSPEND_BIT rc=%d\n", rc);
+	}
+
+	ret = gpio_direction_output(global_gpio->ADCPWREN, 0);
+	if (ret)
+		printk("[BAT][CHG] failed to pull-low ADCPWREN-gpios01\n");
+
+	ret = gpio_direction_output(global_gpio->DPM_SW_EN, 0);
+	if (ret)
+		printk("[BAT][CHG] failed to pull-low DPM_SW_EN-gpio134\n");
+	
+	smbchg_rerun_aicl(smbchg_dev);
+
+	smbchg_relax(smbchg_dev, PM_ADC_JUDGE);
+
+	smbchg_jeita_start_work(smbchg_dev, 0);		//ASUS BSP Austin_T: Jeita start
+}
+//ASUS BSP Austin_Tseng : Add ASUS Adapter Detecting ---
+
+//ASUS BSP Austin_Tseng : Add BatAlarm +++
+static struct alarm bat_alarm;
+static DEFINE_SPINLOCK(bat_alarm_slock);
+static enum alarmtimer_restart batAlarm_handler(struct alarm *alarm, ktime_t now)
+{
+	printk("[BAT][alarm] batAlarm triggered\n");
+	return ALARMTIMER_NORESTART;
+}
+void BatTriggeredSetRTC(struct work_struct *dat)
+{
+	unsigned long batflags;
+	struct timespec new_batAlarm_time;
+	struct timespec mtNow;
+	int RTCSetInterval = 60;
+
+	if (!smbchg_dev) {
+		printk("[BAT][CHG] %s: driver not ready yet!\n", __FUNCTION__);
+		return;
+	}
+
+	if (!smbchg_dev->usb_present) {
+		alarm_cancel(&bat_alarm);
+		printk("[BAT][CHG] %s cancel\n", __FUNCTION__);
+		return;
+	}
+	mtNow = current_kernel_time();
+	new_batAlarm_time.tv_sec = 0;
+	new_batAlarm_time.tv_nsec = 0;
+
+	RTCSetInterval = 60;
+
+	new_batAlarm_time.tv_sec = mtNow.tv_sec + RTCSetInterval;
+	printk("[BAT][CHG] %s: alarm start after %ds\n", __FUNCTION__, RTCSetInterval);
+	spin_lock_irqsave(&bat_alarm_slock, batflags);
+	alarm_start(&bat_alarm, timespec_to_ktime(new_batAlarm_time));
+	spin_unlock_irqrestore(&bat_alarm_slock, batflags);
+}
+//ASUS BSP Austin_Tseng : Add BatAlarm ---
+
+#define COUNTRY_CODE_PATH "/factory/COUNTRY"
+void read_BR_countrycode_work(struct work_struct *work)
+{
+    char buf[32];
+    int readlen = 0;
+	struct file *fd;
+
+	initKernelEnv();
+
+	fd = filp_open(COUNTRY_CODE_PATH, O_RDONLY, 0);
+	if (IS_ERR_OR_NULL(fd)) {
+        printk("[BAT][CHG] OPEN (%s) failed\n", COUNTRY_CODE_PATH);
+		if (BR_read_count <= 10); {
+			schedule_delayed_work(&read_countrycode_work, msecs_to_jiffies(2000));
+			BR_read_count ++;
+		}
+		return;
+    }
+
+	readlen = fd->f_op->read(fd, buf, strlen(buf), &fd->f_pos);
+	if (readlen < 0) {
+		printk("[BAT][CHG] Read (%s) error\n", COUNTRY_CODE_PATH);
+		deinitKernelEnv();
+		filp_close(fd, NULL);
+		return;
+	}
+	buf[readlen] = '\0';
+	printk("[BAT][CHG] country code = %s\n", buf);
+	if (strcmp(buf, "BR") == 0)
+		BR_countrycode_flag = 1;
+    filp_close(fd, NULL);
+}
+
+struct switch_dev usb_alert_dev;
+void USB_alert_detect_work(struct work_struct *work)
+{
+	int status;
+
+
+	status = gpio_get_value(global_gpio->USB_TEMP_ALERT);
+	printk("[BAT][CHG] USB_alert boot completed, gpio90 status = %d\n", status);
+	usb_alert_flag = status;
+
+	switch_set_state(&usb_alert_dev, status);
+	if (status == 1 && is_smbchg_charging(smbchg_dev)) {
+		schedule_work(&smbchg_dev->usb_set_online_work);
+		smbchg_usb_suspend(smbchg_dev, true);
+		printk("[BAT][CHG] usb_temp_alert_interrupt, set usb_online = 0 and suspend charger\n");
+	}
+}
+
+//[+++]Add the interrupt hander for usb temperature detection
+//static struct timespec g_last_print_time;
+static irqreturn_t usb_temp_alert_interrupt(int irq, void *dev_id)
+{
+	int val = gpio_get_value_cansleep(global_gpio->USB_TEMP_ALERT);
+
+	printk("[CY]Get USB_Thermal_Status : %d\n", val);
+	switch_set_state(&usb_alert_dev, val);
+
+	if (val == 1)
+		usb_alert_flag = val;
+
+	if (val == 1 && is_smbchg_charging(smbchg_dev)) {
+		smbchg_usb_suspend(smbchg_dev, true);
+		printk("[BAT][CHG] usb_temp_alert_interrupt, suspend charger\n");
+	}
+	schedule_work(&smbchg_dev->usb_set_online_work);
+
+	return IRQ_HANDLED;
+}
+//[---]Add the interrupt hander for usb temperature detection
+
+void register_usb_alert(void)
+{
+	int ret;
+	/* register switch device for usb alert report */
+	usb_alert_dev.name = "usb_connector";
+	usb_alert_dev.index = 0;
+
+	ret = switch_dev_register(&usb_alert_dev);
+	if (ret < 0)
+        printk("[BAT][CHG] Fail to register switch usb_alert uevent\n");
+    else
+        printk("[BAT][CHG] Success to register usb_alert switch\n");
+}
+
 static int smbchg_probe(struct spmi_device *spmi)
 {
-	int rc;
+	int ret, rc;	//Austin_T
+	struct gpio_control *gpio_ctrl;		//Austin_T
 	struct smbchg_chip *chip;
 	struct power_supply *usb_psy, *typec_psy = NULL;
 	struct qpnp_vadc_chip *vadc_dev = NULL, *vchg_vadc_dev = NULL;
 	const char *typec_psy_name;
+	int usb_alert_irq = 0;
+	bool after_PR2 = 0;
 
+	printk("[BAT][CHG] %s start\n", __FUNCTION__);
+
+	factory_build_flag = 0;					//ASUS BSP Austin_T : FactoryBuild flag
+	en_charging_limit = 0;
+	probe_start_time = jiffies;
+	old_VWC_time = 0;
+	thermal_engine_time = jiffies;
 	usb_psy = power_supply_get_by_name("usb");
 	if (!usb_psy) {
 		pr_smb(PR_STATUS, "USB supply not found, deferring probe\n");
@@ -8472,6 +10754,14 @@ static int smbchg_probe(struct spmi_device *spmi)
 		dev_err(&spmi->dev, "Unable to allocate memory\n");
 		return -ENOMEM;
 	}
+
+//ASUS BSP Austin_Tseng
+	gpio_ctrl = devm_kzalloc(&spmi->dev, sizeof(*gpio_ctrl), GFP_KERNEL);
+	if (!gpio_ctrl) {
+		dev_err(&spmi->dev, "Unable to allocate memory\n");
+		return -ENOMEM;
+	}
+//ASUS BSP Austin_Tseng
 
 	chip->fcc_votable = create_votable("BATT_FCC",
 			VOTE_MIN,
@@ -8561,6 +10851,14 @@ static int smbchg_probe(struct spmi_device *spmi)
 			smbchg_parallel_usb_en_work);
 	INIT_DELAYED_WORK(&chip->vfloat_adjust_work, smbchg_vfloat_adjust_work);
 	INIT_DELAYED_WORK(&chip->hvdcp_det_work, smbchg_hvdcp_det_work);
+	INIT_DELAYED_WORK(&jeita_work, jeita_judge_work);					//ASUS Austin_T : Add JEITA workqueue
+	INIT_DELAYED_WORK(&adapter_detect_work, adapter_detect_judge_work);	//ASUS Austin_T : Add Adapter detect workqueue
+	INIT_DELAYED_WORK(&asus_adapter_adc_work, asus_adapter_adc_judge_work);
+	INIT_DELAYED_WORK(&Set_COS_APSD_work, Set_COS_APSD_FLASE_work);
+	INIT_DELAYED_WORK(&boot_SDP_rerun_apsd_work, do_boot_SDP_rerun_apsd_work);
+	INIT_DELAYED_WORK(&read_countrycode_work, read_BR_countrycode_work);
+	INIT_DELAYED_WORK(&USB_alert_work, USB_alert_detect_work);
+
 	init_completion(&chip->src_det_lowered);
 	init_completion(&chip->src_det_raised);
 	init_completion(&chip->usbin_uv_lowered);
@@ -8585,6 +10883,78 @@ static int smbchg_probe(struct spmi_device *spmi)
 	mutex_init(&chip->wipower_config);
 	mutex_init(&chip->usb_status_lock);
 	device_init_wakeup(chip->dev, true);
+
+	INIT_DELAYED_WORK(&SetBatRTCWorker, BatTriggeredSetRTC);		//ASUS Austin_T : Add BatAlarm workqueue
+	alarm_init(&bat_alarm, ALARM_REALTIME, batAlarm_handler);
+
+	smbchg_dev = chip;						//ASUS BSP Austin_Tseng
+	global_gpio = gpio_ctrl;				//ASUS BSP Austin_Tseng
+	chip->RE_APSD_flag = 0;
+	chip->EXT_RE_APSD_flag = 0;
+	chip->CHG_TYPE_flag = NONE;
+
+//ASUS BSP Austin_T: Request ADCPWREN-gpios01, DM_SW_EN-gpios134, ADC_VDD_EN-gpios99 & USBID_CTRL +++
+	gpio_ctrl->ADCPWREN = of_get_named_gpio(chip->spmi->dev.of_node, "ADCPWREN-gpios01", 0);
+
+		printk("[BAT][CHG] enable gpio01 %d\n", gpio_ctrl->ADCPWREN);
+
+	ret = gpio_request(gpio_ctrl->ADCPWREN, "ADCPWREN-gpios01");
+	if (ret)
+		printk("[BAT][CHG] failed to request ADCPWREN-gpios01\n");
+
+	gpio_ctrl->DPM_SW_EN = of_get_named_gpio(chip->spmi->dev.of_node, "DPM_SW_EN-gpios134", 0);
+
+	printk("[BAT][CHG] enable gpio134 %d\n", gpio_ctrl->DPM_SW_EN);
+
+	ret = gpio_request(gpio_ctrl->DPM_SW_EN, "DPM_SW_EN-gpios134");
+	if (ret)
+		printk("[BAT][CHG] failed to request DPM_SW_EN-gpios134\n");
+
+	if ((g_ASUS_hwID >= ZE552KL_PR && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR && g_ASUS_hwID <= ZE520KL_MP)) {
+		gpio_ctrl->ADC_VDD_EN = of_get_named_gpio(chip->spmi->dev.of_node, "ADC_VDD_EN-gpios99", 0);
+
+		printk("[BAT][CHG] enable gpio99 %d\n", gpio_ctrl->ADC_VDD_EN);
+
+		ret = gpio_request(gpio_ctrl->ADC_VDD_EN, "ADC_VDD_EN-gpios99");
+		if (ret)
+			printk("[BAT][CHG] failed to request ADC_VDD_EN-gpios99\n");
+	}
+	/*
+	//Do this after smbchg_hw_init()
+	if ((g_ASUS_hwID >= ZE552KL_PR2 && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR2 && g_ASUS_hwID <= ZE520KL_MP)) {
+		gpio_ctrl->USBID_CTRL = of_get_named_gpio(chip->spmi->dev.of_node, "USBID_CTRL-gpios08", 0);
+
+		printk("[BAT][CHG] enable gpio08 %d\n", gpio_ctrl->USBID_CTRL);
+
+		ret = gpio_request(gpio_ctrl->USBID_CTRL, "USBID_CTRL-gpios08");
+		if (ret)
+			printk("[BAT][CHG] failed to request USBID_CTRL-gpios08\n");
+	}
+	*/
+//ASUS BSP Austin_T: Request ADCPWREN-gpios01, DM_SW_EN-gpios134, ADC_VDD_EN-gpios99 & USBID_CTRL ---
+
+//ASUS BSP Austin_T : msm8953_gpio99 & pm8953_gpio08 control after PR stage +++
+	if ((g_ASUS_hwID >= ZE552KL_PR && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR && g_ASUS_hwID <= ZE520KL_MP)) {
+		printk("[BAT][CHG] After PR stage probe, pull high gpio99\n");
+		rc = gpio_direction_output(global_gpio->ADC_VDD_EN, 1);
+		if (rc)
+			printk("[BAT][CHG] failed to pull-high ADC_VDD_EN-gpio99\n");
+	}	
+	/*
+	//Do this after smbchg_hw_init()
+	if ((g_ASUS_hwID >= ZE552KL_PR2 && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR2 && g_ASUS_hwID <= ZE520KL_MP)) {
+		after_PR2 = 1;
+		printk("[BAT][CHG] After PR2 stage probe, set pm8953 gpio08 digital input\n");
+		rc = gpio_direction_input(global_gpio->USBID_CTRL);
+		if (rc)
+			printk("[BAT][CHG] failed to set pm8953 gpio08 digital input\n");
+	}
+	*/
+//ASUS BSP Austin_T : msm8953_gpio99 & pm8953_gpio08 control after PR stage ---
 
 	rc = smbchg_parse_peripherals(chip);
 	if (rc) {
@@ -8617,7 +10987,28 @@ static int smbchg_probe(struct spmi_device *spmi)
 			"Unable to intialize hardware rc = %d\n", rc);
 		goto out;
 	}
+	//[+++]Change the GPIO 8 control after OTG_CMD_CTRL_RID_EN
+	if ((g_ASUS_hwID >= ZE552KL_PR2 && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR2 && g_ASUS_hwID <= ZE520KL_MP)) {
+		gpio_ctrl->USBID_CTRL = of_get_named_gpio(chip->spmi->dev.of_node, "USBID_CTRL-gpios08", 0);
 
+		printk("[BAT][CHG] enable gpio08 %d\n", gpio_ctrl->USBID_CTRL);
+
+		ret = gpio_request(gpio_ctrl->USBID_CTRL, "USBID_CTRL-gpios08");
+		if (ret)
+			printk("[BAT][CHG] failed to request USBID_CTRL-gpios08\n");
+	}
+	if ((g_ASUS_hwID >= ZE552KL_PR2 && g_ASUS_hwID <= ZE552KL_MP) || 
+		(g_ASUS_hwID >= ZE520KL_PR2 && g_ASUS_hwID <= ZE520KL_MP)) {
+		after_PR2 = 1;
+		printk("[BAT][CHG] After PR2 stage probe, set pm8953 gpio08 digital input\n");
+		rc = gpio_direction_input(global_gpio->USBID_CTRL);
+		if (rc)
+			printk("[BAT][CHG] failed to set pm8953 gpio08 digital input\n");
+	}
+	msleep(15);//If there is no this delay, sometimes the OTG still failed to be detected
+	//[---]Change the GPIO 8 control after OTG_CMD_CTRL_RID_EN
+	
 	rc = determine_initial_status(chip);
 	if (rc < 0) {
 		dev_err(&spmi->dev,
@@ -8662,6 +11053,10 @@ static int smbchg_probe(struct spmi_device *spmi)
 	chip->psy_registered = true;
 	chip->allow_hvdcp3_detection = true;
 
+	create_chargerIC_status_proc_file();	//ASUS BSP Austin_Tseng
+	//create_charger_limit_enable_proc_file();
+	//create_thermal_table_params_proc_file();
+
 	if (chip->cfg_chg_led_support &&
 			chip->schg_version == QPNP_SCHG_LITE) {
 		rc = smbchg_register_chg_led(chip);
@@ -8698,6 +11093,12 @@ static int smbchg_probe(struct spmi_device *spmi)
 	update_usb_status(chip, is_usb_present(chip), false);
 	dump_regs(chip);
 	create_debugfs_entries(chip);
+//[+++]Create a file for SMMI adb interface (Capacity, Current, Voltag)
+	//create_battery_capacity_proc_file();
+	//create_battery_voltage_proc_file();
+	//create_battery_current_proc_file();
+	//create_battery_FCC_proc_file();
+//[---]Create a file for SMMI adb interface (Capacity, Current, Voltag)
 	dev_info(chip->dev,
 		"SMBCHG successfully probe Charger version=%s Revision DIG:%d.%d ANA:%d.%d batt=%d dc=%d usb=%d\n",
 			version_str[chip->schg_version],
@@ -8705,7 +11106,62 @@ static int smbchg_probe(struct spmi_device *spmi)
 			chip->revision[ANA_MAJOR], chip->revision[ANA_MINOR],
 			get_prop_batt_present(chip),
 			chip->dc_present, chip->usb_present);
+
+//ASUS BSP Austin_T : Set Minimum system voltage +++
+	rc = smbchg_sec_masked_write(chip, chip->bat_if_base + CFG_SYSMIN,
+			CFG_SYSMIN_MASK, CFG_SYSMIN_3P6);
+	if (rc)
+		printk("[BAT][CHG] Failed to set CFG_SYSMIN_3P6, 12F4 0x10 rc=%d\n", rc);
+//ASUS BSP Austin_T : Set Minimum system voltage ---
+
+//ASUS BSP Austin_T : CHG_dump_regs +++
+	rc = sysfs_create_group(&chip->dev->kobj, &dump_reg_attr_group);
+	if (rc)
+		goto exit_remove;
+//ASUS BSP Austin_T : CHG_dump_regs ---
+
+	schedule_delayed_work(&read_countrycode_work, msecs_to_jiffies(10000));		//ASUS BSP Austin_T: adapter detect start
+
+//[+++]Add the gpio for USB high temperature alert
+	if (g_usb_alert_mode && !g_Charger_mode && after_PR2) {
+
+		gpio_ctrl->USB_TEMP_ALERT = of_get_named_gpio(chip->spmi->dev.of_node, "USB_TEMP_ALERT-gpios90", 0);
+		printk("[BAT][CHG] enable gpio90 for USB_Alert  %d\n", gpio_ctrl->USB_TEMP_ALERT);
+
+		if (gpio_ctrl->USB_TEMP_ALERT > 0) {
+			printk("[CY]bHasUSB_Alert = true\n");
+			ret = gpio_request(gpio_ctrl->USB_TEMP_ALERT, "USB_TEMP_ALERT-gpios90");
+			if (ret < 0) {
+				printk("[BAT][CHG] failed to request USB_TEMP_ALERT-gpios90\n");
+				return 0;
+			}
+		} else {
+			printk("[CY]bHasUSB_Alert = false\n");
+			return 0;
+		}
+
+		register_usb_alert();
+		usb_alert_irq = gpio_to_irq(gpio_ctrl->USB_TEMP_ALERT);
+		if (usb_alert_irq < 0) {
+			printk("[CY]%s: gpio_to_irq ERROR(%d).\n", __FUNCTION__, usb_alert_irq);
+			return 0;
+		}
+		ret = request_threaded_irq(usb_alert_irq, NULL, usb_temp_alert_interrupt,
+			IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING | IRQF_ONESHOT,  "usb_temp_alert", NULL);	//IRQF_ONESHOT
+		if (ret < 0)
+			printk("[CY]Failed to request usb_temp_alert_interrupt\n");
+	}
+//[---]Add the gpio for USB high temperature alert
+
+	printk("[BAT][CHG] %s end\n", __FUNCTION__);
+
 	return 0;
+
+//ASUS BSP Austin_T : CHG_dump_regs +++
+exit_remove:
+	sysfs_remove_group(&chip->dev->kobj, &dump_reg_attr_group);
+	return rc;
+//ASUS BSP Austin_T : CHG_dump_regs ---
 
 unregister_led_class:
 	if (chip->cfg_chg_led_support && chip->schg_version == QPNP_SCHG_LITE)
@@ -8766,6 +11222,17 @@ static void smbchg_shutdown(struct spmi_device *spmi)
 	struct smbchg_chip *chip = dev_get_drvdata(&spmi->dev);
 	int rc;
 
+//ASUS BSP Austin_T : Disable OTG when shut down +++
+	printk("[BAT][CHG] Disable OTG when shutdown\n");
+	rc = smbchg_masked_write(chip, chip->bat_if_base + CMD_CHG_REG,
+			OTG_EN_BIT, 0);
+	if (rc < 0)
+		dev_err(chip->dev, "Couldn't disable OTG mode rc=%d\n", rc);
+	msleep(1500);
+//ASUS BSP Austin_T : Disable OTG when shut down ---
+
+	cancel_delayed_work(&read_countrycode_work);	// ASUS BSP Austin_T : Cancel read country code workque +++
+
 	if (!(chip->wa_flags & SMBCHG_RESTART_WA))
 		return;
 
@@ -8816,11 +11283,11 @@ static void smbchg_shutdown(struct spmi_device *spmi)
 
 	/* vote to ensure AICL rerun is enabled */
 	rc = vote(chip->hw_aicl_rerun_enable_indirect_votable,
-			SHUTDOWN_WORKAROUND_VOTER, true, 0);
+			SHUTDOWN_WORKAROUND_VOTER, false, 0);	//ASUS Austin_T : true >> false
 	if (rc < 0)
 		pr_err("Couldn't vote to enable indirect AICL rerun\n");
 	rc = vote(chip->hw_aicl_rerun_disable_votable,
-		WEAK_CHARGER_HW_AICL_VOTER, false, 0);
+		WEAK_CHARGER_HW_AICL_VOTER, true, 0);		//ASUS Austin_T : false >> true
 	if (rc < 0)
 		pr_err("Couldn't vote to enable AICL rerun\n");
 
@@ -8874,7 +11341,60 @@ static void smbchg_shutdown(struct spmi_device *spmi)
 	pr_smb(PR_STATUS, "wrote power off configurations\n");
 }
 
+#define JEITA_MINIMUM_INTERVAL (30)
+static int smbchg_resume(struct device *dev)
+{
+	struct timespec mtNow;
+	int nextJEITAinterval;
+	int ret;
+
+	if (!is_smbchg_charging(smbchg_dev)) {
+		printk("[BAT][CHG] smbchg_resume with No charger present, skip jeita\n");
+		
+		if ((g_ASUS_hwID >= ZE552KL_PR && g_ASUS_hwID <= ZE552KL_MP) || 
+			(g_ASUS_hwID >= ZE520KL_PR && g_ASUS_hwID <= ZE520KL_MP)) {
+			printk("[BAT][CHG] smbchg_resume with No charger present, enable PRT8301\n");
+			ret = gpio_direction_output(global_gpio->ADC_VDD_EN, 1);
+			if (ret)
+			printk("[BAT][CHG] failed to pull-high ADC_VDD_EN-gpio99\n");
+		}
+		return 0;
+	}
+
+	mtNow = current_kernel_time();
+
+	/*BSP Austin_Tseng: if next JEITA time less than 30s, do JEITA
+			(next JEITA time = last JEITA time + 60s)*/
+	nextJEITAinterval = 60 - (mtNow.tv_sec - last_jeita_time.tv_sec);
+	printk("[BAT][CHG] %s, nextJEITAinterval = %d\n", __FUNCTION__, nextJEITAinterval);
+	if (nextJEITAinterval <= JEITA_MINIMUM_INTERVAL) {
+		smbchg_jeita_start_work(smbchg_dev, 0);
+		cancel_delayed_work(&SetBatRTCWorker);
+	} else{
+		smbchg_jeita_start_work(smbchg_dev, nextJEITAinterval * 1000);
+	}
+	return 0;
+}
+
+static int smbchg_suspend(struct device *dev)
+{
+	int ret;
+
+	if (!is_smbchg_charging(smbchg_dev)) {
+		if ((g_ASUS_hwID >= ZE552KL_PR && g_ASUS_hwID <= ZE552KL_MP) || 
+			(g_ASUS_hwID >= ZE520KL_PR && g_ASUS_hwID <= ZE520KL_MP)) {
+			printk("[BAT][CHG] smbchg_suspend with No charger present, disable PRT8301\n");
+			ret = gpio_direction_output(global_gpio->ADC_VDD_EN, 0);
+			if (ret)
+			printk("[BAT][CHG] failed to pull-low ADC_VDD_EN-gpio99\n");
+		}
+	}
+	return 0;
+}
+
 static const struct dev_pm_ops smbchg_pm_ops = {
+	.resume		= smbchg_resume,
+	.suspend    = smbchg_suspend,
 };
 
 MODULE_DEVICE_TABLE(spmi, smbchg_id);

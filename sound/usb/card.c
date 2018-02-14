@@ -582,6 +582,7 @@ snd_usb_audio_probe(struct usb_device *dev,
 	chip->probing = 0;
 	intf->needs_remote_wakeup = 1;
 	mutex_unlock(&register_mutex);
+	printk("[usb_host] Sound card created\n");
 	return chip;
 
  __error:

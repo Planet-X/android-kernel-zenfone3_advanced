@@ -20,6 +20,15 @@
 #include <linux/msm_audio_ion.h>
 #include <sound/audio_calibration.h>
 #include <sound/audio_cal_utils.h>
+/* ASUS_BSP Paul +++ */
+#include <linux/switch.h>
+#include <sound/soc.h>
+#include "../../codecs/msm8x16-wcd.h"
+/* ASUS_BSP Paul --- */
+
+/* ASUS_BSP Eric +++ */
+#include "../../codecs/wcd-mbhc-v2.h"
+/* ASUS_BSP Eric --- */
 
 struct audio_cal_client_info {
 	struct list_head		list;
@@ -35,6 +44,23 @@ struct audio_cal_info {
 
 static struct audio_cal_info	audio_cal;
 
+/* ASUS_BSP Paul +++ */
+int g_audiowizard_force_preset_state = 0;
+int g_skype_state = 0;
+extern struct snd_soc_codec *registered_codec;
+extern struct switch_dev *g_audiowizard_force_preset_sdev;
+/* ASUS_BSP Paul --- */
+
+/* ASUS_BPS Eric +++ */
+extern struct msm8x16_wcd_priv *g_msm8x16_wcd_priv;
+extern uint32_t g_ZL;
+extern uint32_t g_ZR;
+/* ASUS_BPS Eric --- */
+
+//Jacob cherry pick ZE500KL change +++
+int audio_mode = -1;
+int mode = -1;
+//Jacob cherry pick ZE500KL change ---
 
 static bool callbacks_are_equal(struct audio_cal_callbacks *callback1,
 				struct audio_cal_callbacks *callback2)
@@ -392,6 +418,8 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 	int				ret = 0;
 	int32_t				size;
 	struct audio_cal_basic		*data = NULL;
+	struct audio_codec_reg *codec_reg = NULL; /* ASUS_BSP Paul +++ */
+	struct headset_imp_val *imp_val = NULL; // ASUS_BSP : Eric
 	pr_debug("%s\n", __func__);
 
 	switch (cmd) {
@@ -402,6 +430,141 @@ static long audio_cal_shared_ioctl(struct file *file, unsigned int cmd,
 	case AUDIO_GET_CALIBRATION:
 	case AUDIO_POST_CALIBRATION:
 		break;
+
+	/* ASUS_BSP Paul +++ */
+	case AUDIO_SET_CODEC_REG:
+		mutex_lock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+		codec_reg = kmalloc(sizeof(struct audio_codec_reg), GFP_KERNEL);
+		if (codec_reg == NULL) {
+			pr_err("%s: could not allocated codec_reg!\n", __func__);
+			ret = -ENOMEM;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (copy_from_user(codec_reg, (void *)arg,
+				sizeof(struct audio_codec_reg))) {
+			pr_err("%s: Could not copy codec_reg from user\n", __func__);
+			ret = -EFAULT;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (codec_reg->index > MSM8X16_WCD_CACHE_SIZE - 1) {
+			pr_err("%s: index too large\n", __func__);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (!snd_soc_codec_readable_register(registered_codec, codec_reg->index) ||
+				snd_soc_codec_volatile_register(registered_codec, codec_reg->index)) {
+			pr_err("%s: reg[0x%x] is not writable\n", __func__, codec_reg->index);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		ret = snd_soc_write(registered_codec, codec_reg->index, codec_reg->value);
+		mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+		goto done;
+	case AUDIO_GET_CODEC_REG:
+		mutex_lock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+		codec_reg = kmalloc(sizeof(struct audio_codec_reg), GFP_KERNEL);
+		if (codec_reg == NULL) {
+			pr_err("%s: could not allocated codec_reg!\n", __func__);
+			ret = -ENOMEM;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (copy_from_user(codec_reg, (void *)arg,
+				sizeof(struct audio_codec_reg))) {
+			pr_err("%s: Could not copy codec_reg from user\n", __func__);
+			ret = -EFAULT;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (codec_reg->index > MSM8X16_WCD_CACHE_SIZE - 1) {
+			pr_err("%s: index too large\n", __func__);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		if (!snd_soc_codec_readable_register(registered_codec, codec_reg->index)) {
+			pr_err("%s: reg[0x%x] is not readable\n", __func__, codec_reg->index);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+			goto done;
+		}
+		codec_reg->value = snd_soc_read(registered_codec, codec_reg->index);
+		if (copy_to_user((void *)arg, codec_reg,
+				sizeof(struct audio_codec_reg))) {
+			pr_err("%s: Could not copy codec_reg to user\n", __func__);
+			ret = -EFAULT;
+		}
+		mutex_unlock(&audio_cal.cal_mutex[CODEC_REG_TYPE]);
+		goto done;
+	case AUDIO_SET_AUDIOWIZARD_FORCE_PRESET:
+		mutex_lock(&audio_cal.cal_mutex[AUDIOWIZARD_FORCE_PRESET_TYPE]);
+		if (copy_from_user(&g_audiowizard_force_preset_state, (void *)arg,
+				sizeof(g_audiowizard_force_preset_state))) {
+			pr_err("%s: Could not copy g_audiowizard_force_preset_state from user\n", __func__);
+			ret = -EFAULT;
+		}
+		switch_set_state(g_audiowizard_force_preset_sdev, g_audiowizard_force_preset_state);
+		mutex_unlock(&audio_cal.cal_mutex[AUDIOWIZARD_FORCE_PRESET_TYPE]);
+		goto done;
+	/* ASUS_BSP Paul --- */
+	/* ASUS_BSP Eric +++ */
+	case AUDIO_GET_HS_IMP:
+		printk("AUDIO_GET_HS_IMP : start\n");
+		mutex_lock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+		imp_val = kmalloc(sizeof(struct headset_imp_val), GFP_KERNEL);
+		if (imp_val == NULL) {
+			//pr_err("%s: could not allocated codec_reg!\n", __func__);
+			printk("%s: could not allocated codec_reg!\n", __func__);
+			ret = -ENOMEM;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		if (copy_from_user(imp_val, (void *)arg,
+				sizeof(struct headset_imp_val))) {
+			//pr_err("%s: Could not copy codec_reg from user\n", __func__);
+			printk("%s: Could not copy codec_reg from user\n", __func__);
+			ret = -EFAULT;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		if ( g_msm8x16_wcd_priv->mbhc.current_plug == MBHC_PLUG_TYPE_NONE ||
+			g_msm8x16_wcd_priv->mbhc.current_plug  == MBHC_PLUG_TYPE_INVALID ) {
+			//pr_err("%s: headset not plugin or invalid plug\n", __func__);
+			printk("%s: headset not plugin or invalid plug\n", __func__);
+			ret = -EINVAL;
+			mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+			goto done;
+		}
+		imp_val->ZL = g_ZL;
+		imp_val->ZR = g_ZR;
+		printk("%s: RR = %d , LL = %d\n", __func__ , imp_val->ZR , imp_val->ZL);
+		if (copy_to_user((void *)arg, imp_val,
+				sizeof(struct headset_imp_val))) {
+			//pr_err("%s: Could not copy imp_val to user\n", __func__);
+			printk("%s: Could not copy imp_val to user\n", __func__);
+			ret = -EFAULT;
+		}
+		mutex_unlock(&audio_cal.cal_mutex[GET_IMP_TYPE]);
+		printk("AUDIO_GET_HS_IMP : done\n");
+		goto done;
+	/* ASUS_BSP Eric --- */
+	//Jacob cherry pick ZE500KL change +++
+	case AUDIO_SET_MODE:
+        mutex_lock(&audio_cal.cal_mutex[SET_MODE_TYPE]);
+        if(copy_from_user(&mode, (void *)arg,sizeof(mode))) {
+            pr_err("%s: Could not copy lmode to user\n", __func__);
+            ret = -EFAULT;			
+        }
+		
+        audio_mode = mode;
+        printk("%s: Audio mode status:audio_mode=%d\n",__func__,audio_mode);
+        mutex_unlock(&audio_cal.cal_mutex[SET_MODE_TYPE]);
+        goto done;
+	//Jacob cherry pick ZE500KL change ---
 	default:
 		pr_err("%s: ioctl not found!\n", __func__);
 		ret = -EFAULT;
@@ -509,8 +672,19 @@ unlock:
 	mutex_unlock(&audio_cal.cal_mutex[data->hdr.cal_type]);
 done:
 	kfree(data);
+	kfree(codec_reg); /* ASUS_BSP Paul +++ */
+	kfree(imp_val); /* ASUS_BSP Eric +++ */
 	return ret;
 }
+
+//Jacob cherry pick ZE500KL change +++
+int get_audiomode(void)
+{
+    printk("%s: Audio mode=%d\n",__func__, audio_mode);
+    return audio_mode;
+}
+//Jacob cherry pick ZE500KL change ---
+EXPORT_SYMBOL(get_audiomode);
 
 static long audio_cal_ioctl(struct file *f,
 		unsigned int cmd, unsigned long arg)
@@ -532,6 +706,23 @@ static long audio_cal_ioctl(struct file *f,
 							204, compat_uptr_t)
 #define AUDIO_POST_CALIBRATION32	_IOWR(CAL_IOCTL_MAGIC, \
 							205, compat_uptr_t)
+/* ASUS_BSP Paul +++ */
+#define AUDIO_SET_CODEC_REG32		_IOWR(CAL_IOCTL_MAGIC, \
+							219, compat_uptr_t)
+#define AUDIO_GET_CODEC_REG32		_IOWR(CAL_IOCTL_MAGIC, \
+							220, compat_uptr_t)
+#define AUDIO_SET_AUDIOWIZARD_FORCE_PRESET32	_IOWR(CAL_IOCTL_MAGIC, \
+							221, compat_uptr_t)
+/* ASUS_BSP Paul --- */
+
+/* ASUS_BSP Eric +++ */
+#define AUDIO_GET_HS_IMP32			_IOWR(CAL_IOCTL_MAGIC, \
+							230, compat_uptr_t)
+/* ASUS_BSP Eric --- */
+
+//Jacob cherry pick ZE500KL change +++
+#define AUDIO_SET_MODE32 _IOWR(CAL_IOCTL_MAGIC,225,compat_uptr_t)
+//Jacob cherry pick ZE500KL change ---
 
 static long audio_cal_compat_ioctl(struct file *f,
 		unsigned int cmd, unsigned long arg)
@@ -558,6 +749,27 @@ static long audio_cal_compat_ioctl(struct file *f,
 	case AUDIO_POST_CALIBRATION32:
 		cmd64 = AUDIO_POST_CALIBRATION;
 		break;
+	/* ASUS_BSP Paul +++ */
+	case AUDIO_SET_CODEC_REG32:
+		cmd64 = AUDIO_SET_CODEC_REG;
+		break;
+	case AUDIO_GET_CODEC_REG32:
+		cmd64 = AUDIO_GET_CODEC_REG;
+		break;
+	case AUDIO_SET_AUDIOWIZARD_FORCE_PRESET32:
+		cmd64 = AUDIO_SET_AUDIOWIZARD_FORCE_PRESET;
+		break;
+	/* ASUS_BSP Paul --- */
+	/* ASUS_BSP Eric +++ */
+	case AUDIO_GET_HS_IMP32:
+		cmd64 = AUDIO_GET_HS_IMP;
+		break;
+	/* ASUS_BSP Eric --- */
+    //Jacob cherry pick ZE500KL change +++
+	case AUDIO_SET_MODE32:
+		cmd64 = AUDIO_SET_MODE;
+		break;
+    //Jacob cherry pick ZE500KL change ---
 	default:
 		pr_err("%s: ioctl not found!\n", __func__);
 		ret = -EFAULT;

@@ -50,6 +50,11 @@ bool poweron_alarm;
 module_param(poweron_alarm, bool, 0644);
 MODULE_PARM_DESC(poweron_alarm, "Enable/Disable power-on alarm");
 EXPORT_SYMBOL(poweron_alarm);
+//[+++]Add the control feature for S-Current measurement
+bool rtc_wake_control;
+module_param(rtc_wake_control, bool, 0644);
+MODULE_PARM_DESC(rtc_wake_control, "Enable/Disable rtc-alrm wakeup");
+//[---]Add the control feature for S-Current measurement
 
 /* rtc driver internal structure */
 struct qpnp_rtc {
@@ -685,6 +690,28 @@ fail_alarm_disable:
 	}
 }
 
+//[+++]Add the function to enable/disable qpnp_rtc wakeup ability
+static int qpnp_rtc_suspend(struct spmi_device *spmi, pm_message_t pmesg)
+{
+	struct qpnp_rtc *rtc_dd = dev_get_drvdata(&spmi->dev);
+	if (!rtc_wake_control)
+		return 0;
+	pr_err("disable qpnp_rtc wakeup source\n");
+	disable_irq_wake(rtc_dd->rtc_alarm_irq);
+	return 0;
+}
+
+static int qpnp_rtc_resume(struct spmi_device *spmi)
+{
+	struct qpnp_rtc *rtc_dd = dev_get_drvdata(&spmi->dev);
+	if (!rtc_wake_control)
+		return 0;
+	pr_err("enable qpnp_rtc wakeup source\n");
+	enable_irq_wake(rtc_dd->rtc_alarm_irq);
+	return 0;
+}
+//[---]Add the function to enable/disable qpnp_rtc wakeup ability
+
 static struct of_device_id spmi_match_table[] = {
 	{
 		.compatible = "qcom,qpnp-rtc",
@@ -696,6 +723,8 @@ static struct spmi_driver qpnp_rtc_driver = {
 	.probe          = qpnp_rtc_probe,
 	.remove         = qpnp_rtc_remove,
 	.shutdown       = qpnp_rtc_shutdown,
+	.suspend 	= qpnp_rtc_suspend,
+	.resume		= qpnp_rtc_resume,
 	.driver = {
 		.name   = "qcom,qpnp-rtc",
 		.owner  = THIS_MODULE,

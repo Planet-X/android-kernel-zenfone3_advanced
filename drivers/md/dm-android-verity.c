@@ -611,14 +611,23 @@ error:
 	key_put(key);
 
 	return retval;
+
 }
 
+extern bool g_do_emergency_remount_flag;//ASUS_BSP: workaround for emergency remount cause verity-fec read failed
 static void handle_error(void)
 {
 	int mode = verity_mode();
 	if (mode == DM_VERITY_MODE_RESTART) {
 		DMERR("triggering restart");
+		#if 1//ASUS_BSP: workaround for emergency remount cause verity-fec read failed
+		if(g_do_emergency_remount_flag==1)
+			printk("[ASUS] dm-verity device corrupted 2 !!");
+		else
+			kernel_restart("dm-verity device corrupted");
+		#else
 		kernel_restart("dm-verity device corrupted");
+		#endif
 	} else {
 		DMERR("Mounting verity root failed");
 	}

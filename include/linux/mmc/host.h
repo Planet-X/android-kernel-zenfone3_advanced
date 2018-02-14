@@ -611,6 +611,15 @@ struct mmc_host {
 	bool perf_enable;
 #endif
 	struct mmc_trace_buffer trace_buf;
+
+//ASUS_BSP Deeo : mmc suspend stress test +++
+#ifdef CONFIG_MMC_SUSPENDTEST
+	bool suspendtest;
+	unsigned int suspendcnt;
+	unsigned int suspend_datasz;
+#endif
+//ASUS_BSP Deeo : mmc suspend stress test ---
+
 	enum dev_state dev_status;
 	bool			wakeup_on_idle;
 	struct mmc_cmdq_context_info	cmdq_ctx;

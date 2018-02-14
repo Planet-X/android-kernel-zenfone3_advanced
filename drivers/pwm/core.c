@@ -110,9 +110,12 @@ static struct pwm_chip *pwmchip_find_by_name(const char *name)
 static int pwm_device_request(struct pwm_device *pwm, const char *label)
 {
 	int err;
-
+	//ASUS_BSP Deeo : Remove for LED request pwm resource conflict +++
+	/*
 	if (test_bit(PWMF_REQUESTED, &pwm->flags))
 		return -EBUSY;
+	*/
+	//ASUS_BSP Deeo : Remove for LED request pwm resource conflict ---
 
 	if (!try_module_get(pwm->chip->ops->owner))
 		return -ENODEV;

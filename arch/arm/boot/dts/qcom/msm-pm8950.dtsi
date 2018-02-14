@@ -232,6 +232,17 @@
 				qcom,fast-avg-setup = <0>;
 			};
 
+			chan@b {
+				label = "die_temp_asus";
+				reg = <8>;
+				qcom,decimation = <0>;
+				qcom,pre-div-channel-scaling = <0>;
+				qcom,calibration-type = "absolute";
+				qcom,scale-function = <3>;
+				qcom,hw-settle-time = <0>;
+				qcom,fast-avg-setup = <0>;
+			};
+
 			chan@c {
 				label = "ref_buf_625mv";
 				reg = <0xc>;

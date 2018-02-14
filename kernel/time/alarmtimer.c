@@ -294,8 +294,10 @@ static enum hrtimer_restart alarmtimer_fired(struct hrtimer *timer)
 	alarmtimer_dequeue(base, alarm);
 	spin_unlock_irqrestore(&base->lock, flags);
 
-	if (alarm->function)
+	if (alarm->function) {
+		printk("[PM][ALARM] %s: %pf\n", __func__, alarm->function);
 		restart = alarm->function(alarm, base->gettime());
+	}
 
 	spin_lock_irqsave(&base->lock, flags);
 	if (restart != ALARMTIMER_NORESTART) {
@@ -513,6 +515,7 @@ void alarm_init(struct alarm *alarm, enum alarmtimer_type type,
 }
 EXPORT_SYMBOL_GPL(alarm_init);
 
+extern bool rtc_wake_control;
 /**
  * alarm_start - Sets an absolute alarm to fire
  * @alarm: ptr to alarm to set
@@ -523,6 +526,11 @@ int alarm_start(struct alarm *alarm, ktime_t start)
 	struct alarm_base *base = &alarm_bases[alarm->type];
 	unsigned long flags;
 	int ret;
+
+	if (rtc_wake_control) {
+		printk("[PM] return alarm for rtc_wake_control = %s\n", rtc_wake_control ? "True" : "False");
+		return 0;
+	}
 
 	spin_lock_irqsave(&base->lock, flags);
 	alarm->node.expires = start;

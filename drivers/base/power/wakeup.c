@@ -18,6 +18,10 @@
 #include <trace/events/power.h>
 
 #include "power.h"
+//[+++]Debug for active wakelock before entering suspend
+void print_active_locks(void);
+extern bool g_resume_status;
+//[---]Debug for active wakelock before entering suspend
 
 /*
  * If set, the suspend/hibernate code will abort transitions to a sleep state
@@ -350,7 +354,7 @@ EXPORT_SYMBOL_GPL(device_set_wakeup_capable);
 int device_init_wakeup(struct device *dev, bool enable)
 {
 	int ret = 0;
-
+	printk("[Gpio_keys][wakeup.c] device_init_wakeup %d\n", enable);
 	if (!dev)
 		return -EINVAL;
 
@@ -738,7 +742,7 @@ void pm_print_active_wakeup_sources(void)
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
-			pr_info("active wakeup source: %s\n", ws->name);
+			printk("[PM] active wakeup source: %s\n", ws->name);
 			active = 1;
 		} else if (!active &&
 			   (!last_activity_ws ||
@@ -749,7 +753,7 @@ void pm_print_active_wakeup_sources(void)
 	}
 
 	if (!active && last_activity_ws)
-		pr_info("last active wakeup source: %s\n",
+		printk("[PM] last active wakeup source: %s\n",
 			last_activity_ws->name);
 	rcu_read_unlock();
 }
@@ -779,7 +783,8 @@ bool pm_wakeup_pending(void)
 	spin_unlock_irqrestore(&events_lock, flags);
 
 	if (ret) {
-		pr_info("PM: Wakeup pending, aborting suspend\n");
+		printk("[PM] pm_wakeup_pending(): Wakeup pending, aborting suspend\n");
+		printk("[PM] call pm_print_active_wakeup_sources()\n");
 		pm_print_active_wakeup_sources();
 	}
 
@@ -822,7 +827,13 @@ bool pm_get_wakeup_count(unsigned int *count, bool block)
 			split_counters(&cnt, &inpr);
 			if (inpr == 0 || signal_pending(current))
 				break;
-
+/*[+++]Debug for active wakelock before entering suspend*/
+			if (!g_resume_status){
+				printk("[PM] pm_get_wakeup_count():try to suspend wakelock\n");
+				ASUSEvtlog("[PM] try to suspend wakelock\n");
+				print_active_locks();
+			}
+/*[---]Debug for active wakelock before entering suspend*/
 			schedule();
 		}
 		finish_wait(&wakeup_count_wait_queue, &wait);
@@ -959,6 +970,45 @@ static int wakeup_sources_stats_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
+/*[+++]Debug for active wakelock before entering suspend */
+extern int pmsp_flag; /* kernel/kernel/power/suspend.c */
+extern int pm_stay_unattended_period; /* kernel/kernel/power/suspend.c */
+extern void pmsp_print(void); /* /kernel/kernel/power/autosleep.c */
+extern void print_pm_cpuinfo(void);   /* dump cpuinfo defined kernel/kernel/power/autosleep.c */
+void print_active_locks(void)
+{
+	struct wakeup_source *ws;
+	int wl_active_cnt = 0;	//wakelock_active_cnt
+
+    //rcu_read_lock();
+	list_for_each_entry_rcu(ws, &wakeup_sources, entry)
+	if (ws->active){
+		wl_active_cnt++;
+		printk("[PM]print_active_locks(): %s\n", ws->name);
+		ASUSEvtlog("[PM] active wake lock: %s\n", ws->name);
+		if (pmsp_flag == 1) {
+			if(strncmp(ws->name, "PowerManagerService", strlen("PowerManagerService")) == 0)
+				pmsp_print(); /*call pms_printer_func() to send uevent 0 or 1: kernel/kernel/power/autosleep.c*/
+				//dump cpuinfo
+				printk("[PM] pm_stay_unattended_period: %d\n", pm_stay_unattended_period);
+				if( pm_stay_unattended_period >= PM_UNATTENDED_TIMEOUT*3 ) {
+					pm_stay_unattended_period = 0;
+					print_pm_cpuinfo(); /*call pm_cpuinfo_func() */
+			}
+		}
+		pmsp_flag = 0;
+	}
+
+	if (wl_active_cnt == 0){
+		printk("[PM] print_active_locks():all wakelock are inactive\n");
+		ASUSEvtlog("[PM] all wakelock are inactive\n");
+	}
+
+    //rcu_read_unlock();
+    return;
+}
+EXPORT_SYMBOL(print_active_locks);
+/*[---]Debug for active wakelock before entering suspend */
 static int wakeup_sources_stats_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, wakeup_sources_stats_show, NULL);

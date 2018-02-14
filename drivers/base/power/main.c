@@ -37,6 +37,7 @@
 #include "../base.h"
 #include "power.h"
 
+unsigned int pm_pwrcs_ret=0; /* [PM] This flag can check dpm_suspend state for resume_console in printk.c */
 typedef int (*pm_callback_t)(struct device *);
 
 /*
@@ -364,8 +365,12 @@ static void pm_dev_dbg(struct device *dev, pm_message_t state, char *info)
 static void pm_dev_err(struct device *dev, pm_message_t state, char *info,
 			int error)
 {
-	printk(KERN_ERR "PM: Device %s failed to %s%s: error %d\n",
+	printk("[PM]: Device %s failed to %s%s: error %d\n",
 		dev_name(dev), pm_verb(state.event), info, error);
+	//[+++] Add debug log for suspend and resume when pm_dev_err
+	ASUSEvtlog("PM: Device %s failed to %s%s: error %d\n",
+		dev_name(dev), pm_verb(state.event), info, error);
+	//[---] Add debug log for suspend and resume when pm_dev_err
 }
 
 static void dpm_show_time(ktime_t starttime, pm_message_t state, char *info)
@@ -1530,6 +1535,7 @@ int dpm_suspend(pm_message_t state)
 		if (async_error)
 			break;
 	}
+	pm_pwrcs_ret = 1; /* [PM] This flag can check dpm_suspend state for resume_console in printk.c */
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
 	if (!error)
@@ -1646,7 +1652,7 @@ int dpm_prepare(pm_message_t state)
 				error = 0;
 				continue;
 			}
-			printk(KERN_INFO "PM: Device %s not prepared "
+			printk("[PM] dpm_prepare():Device %s not prepared "
 				"for power transition: code %d\n",
 				dev_name(dev), error);
 			put_device(dev);
@@ -1673,6 +1679,7 @@ int dpm_suspend_start(pm_message_t state)
 {
 	int error;
 
+	printk("[PM] dpm_suspend_start(): call dpm_prepare()\n");
 	error = dpm_prepare(state);
 	if (error) {
 		suspend_stats.failed_prepare++;

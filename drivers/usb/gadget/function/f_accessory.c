@@ -55,6 +55,9 @@
 #define TX_REQ_MAX 4
 #define RX_REQ_MAX 2
 
+#undef pr_debug
+#define pr_debug pr_info
+
 struct acc_hid_dev {
 	struct list_head	list;
 	struct hid_device *hid;

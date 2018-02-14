@@ -153,6 +153,8 @@ struct sdhci_msm_pltfm_data {
 	u32 ice_clk_min;
 	struct sdhci_msm_pm_qos_data pm_qos_data;
 	bool sdr104_wa;
+	bool core_3_0v_support;
+	char *name;		//ASUS_BSP Deeo : add host_name to pdata +++
 };
 
 struct sdhci_msm_bus_vote {
@@ -200,6 +202,7 @@ struct sdhci_msm_host {
 	bool sdio_pending_processing;
 	atomic_t controller_clock;
 	bool use_cdclp533;
+	struct device_attribute cd_status_attr; //ASU_BSP Deeo : add for sd_status
 	bool use_updated_dll_reset;
 	bool use_14lpp_dll;
 	bool enhanced_strobe;
