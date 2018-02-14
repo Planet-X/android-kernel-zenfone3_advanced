@@ -2684,10 +2684,6 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
                         mdwc->voltage_max = MICRO_5V;
 			evt_mode_string = "ASUS AC";
 			break;
-		case POWER_SUPPLY_TYPE_USB_DCP:
-			mdwc->chg_type = DWC3_DCP_CHARGER;
-			mdwc->voltage_max = MICRO_5V;
-			break;
 		case POWER_SUPPLY_TYPE_USB_HVDCP:
 			mdwc->chg_type = DWC3_DCP_CHARGER;
 			mdwc->voltage_max = MICRO_9V;
