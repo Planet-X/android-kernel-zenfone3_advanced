@@ -11869,9 +11869,9 @@ WLAN_TLAPGetNextTxIds
   if ( WLAN_MAX_STA_COUNT <= ucNextSTA )
     ucNextSTA = 0;
 
-    isServed = FALSE;
-    if ( 0 == pTLCb->ucCurLeftWeight )
-    {
+  isServed = FALSE;
+  if ( 0 == pTLCb->ucCurLeftWeight )
+  {
       //current prioirty is done
       if ( WLANTL_AC_BK == (WLANTL_ACEnumType)pTLCb->uCurServedAC )
       {
@@ -11885,7 +11885,7 @@ WLAN_TLAPGetNextTxIds
 
       pTLCb->ucCurLeftWeight =  pTLCb->tlConfigInfo.ucAcWeights[pTLCb->uCurServedAC];
  
-    } // (0 == pTLCb->ucCurLeftWeight)
+  } // (0 == pTLCb->ucCurLeftWeight)
 
   ucTempSTA = ucNextSTA;
   minWeightSta = ucNextSTA;

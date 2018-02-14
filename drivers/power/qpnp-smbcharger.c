@@ -10601,13 +10601,13 @@ void read_BR_countrycode_work(struct work_struct *work)
 
 	fd = filp_open(COUNTRY_CODE_PATH, O_RDONLY, 0);
 	if (IS_ERR_OR_NULL(fd)) {
-        printk("[BAT][CHG] OPEN (%s) failed\n", COUNTRY_CODE_PATH);
-		if (BR_read_count <= 10); {
+                printk("[BAT][CHG] OPEN (%s) failed\n", COUNTRY_CODE_PATH);
+		if (BR_read_count <= 10) {
 			schedule_delayed_work(&read_countrycode_work, msecs_to_jiffies(2000));
 			BR_read_count ++;
 		}
-		return;
-    }
+                return;
+        }
 
 	readlen = fd->f_op->read(fd, buf, strlen(buf), &fd->f_pos);
 	if (readlen < 0) {
