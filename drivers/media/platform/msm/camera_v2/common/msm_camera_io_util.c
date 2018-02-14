@@ -395,6 +395,11 @@ int msm_camera_config_vreg(struct device *dev, struct camera_vreg_t *cam_vreg,
 		return -EINVAL;
 	}
 
+       if(num_vreg == 0 && cam_vreg == NULL) {
+	   	pr_info("%s:%d msm8953 no define qcom,cam-vreg-name\n", __func__, __LINE__);
+	   	return 0;
+       }
+
 	if (!num_vreg_seq)
 		num_vreg_seq = num_vreg;
 

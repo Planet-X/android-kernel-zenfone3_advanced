@@ -789,6 +789,7 @@ struct vfe_device {
 	/* irq info */
 	uint32_t irq0_mask;
 	uint32_t irq1_mask;
+	uint32_t ignore_irq;//ASUS_BSP ZZ++ Fix vfe error
 	/* before halt irq info */
 	uint32_t recovery_irq0_mask;
 	uint32_t recovery_irq1_mask;

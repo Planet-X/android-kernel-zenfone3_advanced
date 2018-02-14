@@ -26,6 +26,7 @@
 #include <linux/uaccess.h>
 #include <linux/msm-bus.h>
 #include <linux/pm_qos.h>
+#include <linux/kernel.h>   /*Display+++*/
 
 #include "mdss.h"
 #include "mdss_panel.h"
@@ -36,6 +37,15 @@
 
 #define XO_CLK_RATE	19200000
 #define CMDLINE_DSI_CTL_NUM_STRING_LEN 2
+
+//ASUS BSP Display +++
+#define PANEL_SLEEP_MODE_ENABLE 0
+
+#if PANEL_SLEEP_MODE_ENABLE
+static bool first_panel_power_on = true;
+#endif
+struct mdss_panel_data *g_mdss_pdata;
+//ASUS BSP Display ---
 
 /* Master structure to hold all the information about the DSI/panel */
 static struct mdss_dsi_data *mdss_dsi_res;
@@ -286,23 +296,31 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+	printk("[Display] %s: ++\n", __func__);
+
+#if !PANEL_SLEEP_MODE_ENABLE
 	ret = mdss_dsi_panel_reset(pdata, 0);
 	if (ret) {
 		pr_warn("%s: Panel reset failed. rc=%d\n", __func__, ret);
 		ret = 0;
 	}
+#endif
+
+	mdelay(7);
 
 	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
 		pr_debug("reset disable: pinctrl not enabled\n");
 
+#if !PANEL_SLEEP_MODE_ENABLE
 	ret = msm_dss_enable_vreg(
 		ctrl_pdata->panel_power_data.vreg_config,
 		ctrl_pdata->panel_power_data.num_vreg, 0);
 	if (ret)
 		pr_err("%s: failed to disable vregs for %s\n",
 			__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
-
+#endif
 end:
+	printk("[Display] %s: --\n", __func__);
 	return ret;
 }
 
@@ -318,6 +336,11 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+	printk("[Display] %s: ++\n", __func__);
+
+#if PANEL_SLEEP_MODE_ENABLE
+    if (first_panel_power_on) {
+#endif
 	ret = msm_dss_enable_vreg(
 		ctrl_pdata->panel_power_data.vreg_config,
 		ctrl_pdata->panel_power_data.num_vreg, 1);
@@ -326,6 +349,9 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 			__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
 		return ret;
 	}
+#if PANEL_SLEEP_MODE_ENABLE
+	}
+#endif
 
 	/*
 	 * If continuous splash screen feature is enabled, then we need to
@@ -338,12 +364,22 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
 
+#if PANEL_SLEEP_MODE_ENABLE
+	if (first_panel_power_on) {
+#endif
 		ret = mdss_dsi_panel_reset(pdata, 1);
 		if (ret)
 			pr_err("%s: Panel reset failed. rc=%d\n",
 					__func__, ret);
+#if PANEL_SLEEP_MODE_ENABLE
+	}
+#endif
 	}
 
+#if PANEL_SLEEP_MODE_ENABLE
+    first_panel_power_on = false;
+#endif
+	printk("[Display] %s: --\n", __func__);
 	return ret;
 }
 
@@ -1228,6 +1264,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 	int ret = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_panel_info *panel_info = NULL;
+	int reset_state = 0;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -1251,6 +1288,12 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 	if (mdss_panel_is_power_on(power_state)) {
 		pr_debug("%s: dsi_off with panel always on\n", __func__);
 		goto panel_power_ctrl;
+	}
+
+	if (!reset_state && power_state == MDSS_PANEL_POWER_OFF &&
+		(g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM)) {
+		ret = mdss_dsi_panel_power_ctrl(pdata, power_state);
+		reset_state = 1;
 	}
 
 	/*
@@ -1280,6 +1323,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 			  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_OFF);
 
 panel_power_ctrl:
+	if (!reset_state)
 	ret = mdss_dsi_panel_power_ctrl(pdata, power_state);
 	if (ret) {
 		pr_err("%s: Panel power off failed\n", __func__);
@@ -4323,6 +4367,8 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 
 	panel_debug_register_base("panel",
 		ctrl_pdata->ctrl_base, ctrl_pdata->reg_size);
+
+	g_mdss_pdata = &(ctrl_pdata->panel_data); //ASUS BSP Display
 
 	pr_debug("%s: Panel data initialized\n", __func__);
 	return 0;

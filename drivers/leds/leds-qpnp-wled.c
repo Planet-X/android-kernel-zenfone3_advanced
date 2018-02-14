@@ -50,6 +50,8 @@
 #define QPNP_WLED_TEST1_REG(b)		(b + 0xE2)
 #define QPNP_WLED_TEST4_REG(b)		(b + 0xE5)
 #define QPNP_WLED_REF_7P7_TRIM_REG(b)	(b + 0xF2)
+/*ASUS_BSP+++*/
+#define QPNP_WLED_SWITCH_SLEW_RATE(b)	(b + 0x54)
 
 #define QPNP_WLED_7P7_TRIM_MASK		0xF
 #define QPNP_WLED_EN_MASK		0x7F
@@ -1334,6 +1336,12 @@ static int qpnp_wled_config(struct qpnp_wled *wled)
 			return rc;
 	}
 
+	if (g_ASUS_hwID >= ZE520KL_EVB && g_ASUS_hwID < ZE552KL_UNKNOWN) {
+		reg = 0x01;
+		rc = qpnp_wled_write_reg(wled, &reg,
+			QPNP_WLED_SWITCH_SLEW_RATE(wled->ctrl_base));
+	}
+
 	/* Configure the MODULATION register */
 	if (wled->mod_freq_khz <= QPNP_WLED_MOD_FREQ_1200_KHZ) {
 		wled->mod_freq_khz = QPNP_WLED_MOD_FREQ_1200_KHZ;
@@ -1517,6 +1525,7 @@ static int qpnp_wled_parse_dt(struct qpnp_wled *wled)
 	u32 temp_val;
 	int rc, i;
 	u8 *strings;
+	char temp_prop[30];
 
 	wled->cdev.name = "wled";
 	rc = of_property_read_string(spmi->dev.of_node,
@@ -1718,6 +1727,12 @@ static int qpnp_wled_parse_dt(struct qpnp_wled *wled)
 		dev_err(&spmi->dev, "Unable to read full scale current\n");
 		return rc;
 	}
+
+	sprintf(temp_prop, "qcom,fs-curr-ua-%d", g_asus_lcdID);
+	rc = of_property_read_u32(spmi->dev.of_node,
+			temp_prop, &temp_val);
+	if (!rc)
+		wled->fs_curr_ua = temp_val;
 
 	wled->cons_sync_write_delay_us = 0;
 	rc = of_property_read_u32(spmi->dev.of_node,

@@ -2023,6 +2023,7 @@ end:
 	return rp->read_cnt;
 }
 
+//#define DSI_CMD_DEBUG 1	//ASUS_BSP: Austin +++
 static int mdss_dsi_cmd_dma_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 					struct dsi_buf *tp)
 {
@@ -2030,9 +2031,22 @@ static int mdss_dsi_cmd_dma_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 	int domain = MDSS_IOMMU_DOMAIN_UNSECURE;
 	char *bp;
 	struct mdss_dsi_ctrl_pdata *mctrl = NULL;
+	//ASUS_BSP: Austin ++
+	#ifdef DSI_CMD_DEBUG
+	int i;
+	#endif
+	//ASUS_BSP: Austin --
 	int ignored = 0;	/* overflow ignored */
 
 	bp = tp->data;
+	//ASUS_BSP: Austin ++
+	#ifdef DSI_CMD_DEBUG
+	printk("%s: ", __func__);
+	for (i = 0; i < tp->len; i++)
+		printk("%x \n", *bp++);
+	printk("\n");
+	#endif
+	//ASUS_BSP: Austin --
 
 	len = ALIGN(tp->len, 4);
 	ctrl->dma_size = ALIGN(tp->len, SZ_4K);

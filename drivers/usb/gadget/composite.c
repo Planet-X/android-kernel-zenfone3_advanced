@@ -36,9 +36,23 @@
 	(speed == USB_SPEED_SUPER ?\
 	SSUSB_GADGET_VBUS_DRAW : CONFIG_USB_GADGET_VBUS_DRAW)
 
+static bool detectMACByConfig = 0;
+static bool hostTypeChanged = 0;
 static bool enable_l1_for_hs;
 module_param(enable_l1_for_hs, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(enable_l1_for_hs, "Enable support for L1 LPM for HS devices");
+
+extern int getMACConnect(void){
+	return detectMACByConfig;
+}
+
+extern int getHostTypeChanged(void){
+	return hostTypeChanged;
+}
+
+extern void resetHostTypeChanged(void){
+	hostTypeChanged = 0;
+}
 
 /**
  * struct usb_os_string - represents OS String to be reported by a gadget
@@ -543,6 +557,12 @@ static int config_buf(struct usb_configuration *config,
 
 		if (!descriptors)
 			continue;
+
+		if (detectMACByConfig && !strcmp(f->name,"Mass Storage Function")){
+			printk("[USB] ingore mass storage\n");
+			continue;
+		}
+
 		status = usb_descriptor_fillbuf(next, len,
 			(const struct usb_descriptor_header **) descriptors);
 		if (status < 0)
@@ -806,6 +826,8 @@ static int set_config(struct usb_composite_dev *cdev,
 	INFO(cdev, "%s config #%d: %s\n",
 	     usb_speed_string(gadget->speed),
 	     number, c ? c->label : "unconfigured");
+
+	printk("[USB] speed:%d\n",gadget->speed);
 
 	if (!c)
 		goto done;
@@ -1651,6 +1673,12 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		switch (w_value >> 8) {
 
 		case USB_DT_DEVICE:
+			if(w_length==0x40){
+				if(detectMACByConfig==1){
+					hostTypeChanged=1;
+				}
+				detectMACByConfig=0;
+			}
 			cdev->desc.bNumConfigurations =
 				count_configs(cdev, USB_DT_DEVICE);
 			if (cdev->desc.bNumConfigurations == 0) {
@@ -1698,6 +1726,12 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 			/* FALLTHROUGH */
 		case USB_DT_CONFIG:
 			spin_lock(&cdev->lock);
+			if(w_length==0x4){
+				if(detectMACByConfig==0){
+					hostTypeChanged=1;
+				}
+				detectMACByConfig=1;
+			}
 			value = config_desc(cdev, w_value);
 			spin_unlock(&cdev->lock);
 			if (value >= 0)

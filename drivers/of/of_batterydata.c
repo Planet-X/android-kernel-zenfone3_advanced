@@ -316,12 +316,15 @@ struct device_node *of_batterydata_get_best_profile(
 {
 	struct batt_ids batt_ids;
 	struct device_node *node, *best_node = NULL;
+	struct device_node *default_node = NULL;
 	struct power_supply *psy;
 	const char *battery_type = NULL;
 	union power_supply_propval ret = {0, };
 	int delta = 0, best_delta = 0, best_id_kohm = 0, id_range_pct,
 		batt_id_kohm = 0, i = 0, rc = 0, limit = 0;
 	bool in_range = false;
+	char *batt_name="batterydata_Generic";
+	bool default_profile = 0;
 
 	psy = power_supply_get_by_name(psy_name);
 	if (!psy) {
@@ -354,6 +357,14 @@ struct device_node *of_batterydata_get_best_profile(
 	 * Find the battery data with a battery id resistor closest to this one
 	 */
 	for_each_child_of_node(batterydata_container_node, node) {
+		//[+++]This is a workaround to load the battery data in EVB
+		of_property_read_string(node, "qcom,battery-type",
+							&battery_type);
+		if(strcmp(battery_type, batt_name) == 0) {
+			default_node = node;
+			default_profile = 1;
+		}
+		//[---]This is a workaround to load the battery data in EVB
 		if (batt_type != NULL) {
 			rc = of_property_read_string(node, "qcom,battery-type",
 							&battery_type);
@@ -388,24 +399,29 @@ struct device_node *of_batterydata_get_best_profile(
 	}
 
 	if (best_node == NULL) {
-		pr_err("No battery data found\n");
-		return best_node;
-	}
-
-	/* check that profile id is in range of the measured batt_id */
-	if (abs(best_id_kohm - batt_id_kohm) >
-			((best_id_kohm * id_range_pct) / 100)) {
-		pr_err("out of range: profile id %d batt id %d pct %d",
-			best_id_kohm, batt_id_kohm, id_range_pct);
-		return NULL;
+		if (default_profile) {
+			best_node = default_node;
+			printk("[BAT][BMS]No battery data found. Use generic profile\n");
+		} else {
+			printk("[BAT][BMS]No battery data found. Also no generic profile\n");
+		}
+	} else if (abs(best_id_kohm - batt_id_kohm) > ((best_id_kohm * id_range_pct) / 100)) {
+		if (default_profile) {
+			best_node = default_node;
+			printk("[BAT][BMS]out of range: profile id %d batt id %d pct %d. Use generic profile\n",
+				best_id_kohm, batt_id_kohm, id_range_pct);
+		} else {
+			printk("[BAT][BMS]out of range: profile id %d batt id %d pct %d. Also no generic profile\n",
+				best_id_kohm, batt_id_kohm, id_range_pct);
+		}
 	}
 
 	rc = of_property_read_string(best_node, "qcom,battery-type",
 							&battery_type);
-	if (!rc)
-		pr_info("%s found\n", battery_type);
-	else
-		pr_info("%s found\n", best_node->name);
+	if (!rc) {
+		printk("[BAT][BMS] selected battery profile Type : %s\n", battery_type);
+	}
+	printk("[BAT][BMS] selected battery profile Name : %s\n", best_node->name);
 
 	return best_node;
 }

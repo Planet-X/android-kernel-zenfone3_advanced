@@ -113,6 +113,9 @@
 
 #define REVERT_CRED(saved_cred)	revert_fsids(saved_cred)
 
+//ASUS_BSP Deeo : set threshold size +++
+#define THRES_SIZE 1024
+
 /* Android 5.0 support */
 
 /* Permission mode for a specific node. Controls how file permissions

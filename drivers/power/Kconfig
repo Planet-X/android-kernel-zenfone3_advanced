@@ -29,6 +29,26 @@ config APM_POWER
 	  Say Y here to enable support APM status emulation using
 	  battery class devices.
 
+config SENSORS_ADS1013
+	tristate "Texas Instruments ADS1013"
+	depends on I2C
+	help
+	  If you say yes here you get support for Texas Instruments ADS1013
+	  ADC device.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called ads1013.
+
+config SENSORS_US5587
+	tristate "Micro Power Intellect US5587"
+	depends on I2C
+	help
+	  If you say yes here you get support for Micro Power Intellect US5587
+	  ADC device.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called us5587.
+
 config GENERIC_ADC_BATTERY
 	tristate "Generic battery support using IIO"
 	depends on IIO
@@ -536,6 +556,12 @@ config QPNP_FG
 	  fuel gauge. The state of charge is reported through a BMS power
 	  supply property and also sends uevents when the capacity is updated.
 
+config QPNP_FG_SUSPEND_PREDICT
+	tristate "QPNP FG Battery Monitoring System driver suspend predict"
+	depends on QPNP_FG
+	help
+	  Say Y here to enable support suspend predict for QPNP_FG driver
+
 config QPNP_FG_GEN3
 	tristate "QPNP GEN3 fuel gauge driver"
 	depends on SPMI || MSM_SPMI
@@ -635,6 +661,12 @@ config MSM_BCL_PERIPHERAL_CTL
 	  Say Y here to enable this BCL PMIC peripheral driver. This driver
 	  provides routines to configure and monitor the BCL
 	  PMIC peripheral.
+
+config UNKNOWN_CHARGER
+	bool "For Unknown Charger Support"
+	default n
+	help
+	  Say y to enable Unknown Charger Support in DWC3
 
 source "drivers/power/reset/Kconfig"
 

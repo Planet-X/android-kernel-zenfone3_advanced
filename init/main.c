@@ -136,6 +136,190 @@ static char *ramdisk_execute_command;
 bool static_key_initialized __read_mostly;
 EXPORT_SYMBOL_GPL(static_key_initialized);
 
+//+++ ASUS_BSP : miniporting : Add for audio dbg mode
+int g_user_dbg_mode = 1;
+EXPORT_SYMBOL(g_user_dbg_mode);
+
+static int set_user_dbg_mode(char *str)
+{
+	if (strcmp("y", str) == 0)
+		g_user_dbg_mode = 1;
+	else
+		g_user_dbg_mode = 0;
+	g_user_dbg_mode = 1;
+	printk("Kernel dbg mode = %d\n", g_user_dbg_mode);
+	return 0;
+}
+__setup("dbg=", set_user_dbg_mode);
+//--- ASUS_BSP : miniporting : Add for audio dbg mode
+
+//+++ ASUS_BSP : miniporting
+enum DEVICE_HWID g_ASUS_hwID=ZE552KL_UNKNOWN;
+char hwid_info[32]={0};
+
+EXPORT_SYMBOL(g_ASUS_hwID);
+
+ static int set_hardware_id(char *str)
+ {
+	strcpy(hwid_info,"HW ID : ");
+	// ZE552KL
+	if ( strcmp("ZE552KL_EVB", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_EVB;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_EVB\n");
+	}
+	else if ( strcmp("ZE552KL_SR1", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_SR1;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_SR1\n");
+	}
+	else if ( strcmp("ZE552KL_SR2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_SR2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_SR2\n");
+	}
+	else if ( strcmp("ZE552KL_ER1", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_ER1;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_ER1\n");
+	}
+	else if ( strcmp("ZE552KL_ER2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_ER2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_ER2\n");
+	}
+	else if ( strcmp("ZE552KL_PR", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_PR;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_PR\n");
+	}
+	else if ( strcmp("ZE552KL_PR2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_PR2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_PR2\n");
+	}
+	else if ( strcmp("ZE552KL_MP", str) == 0 )
+	{
+		g_ASUS_hwID = ZE552KL_MP;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE552KL_MP\n");
+	}
+	// ZE520KL
+	else if ( strcmp("ZE520KL_EVB", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_EVB;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_EVB\n");
+	}
+	else if ( strcmp("ZE520KL_SR1", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_SR1;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_SR1\n");
+	}
+	else if ( strcmp("ZE520KL_SR2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_SR2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_SR2\n");
+	}
+	else if ( strcmp("ZE520KL_ER1", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_ER1;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_ER1\n");
+	}
+	else if ( strcmp("ZE520KL_ER2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_ER2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_ER2\n");
+	}
+	else if ( strcmp("ZE520KL_PR", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_PR;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_PR\n");
+	}
+	else if ( strcmp("ZE520KL_PR2", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_PR2;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_PR2\n");
+	}
+	else if ( strcmp("ZE520KL_MP", str) == 0 )
+	{
+		g_ASUS_hwID = ZE520KL_MP;
+		strcat(hwid_info,str);
+		printk("Kernel HW ID = ZE520KL_MP\n");
+	}
+
+	printk("g_Asus_hwID = %d\n", g_ASUS_hwID);
+	return 0;
+}
+ __setup("HW_ID=", set_hardware_id);
+
+//--- ASUS_BSP : miniporting
+
+//ASUS_BSP Austin_T : add for kernel charger mode. +++
+bool g_Charger_mode = false;
+
+static int set_charger_mode(char *str)
+{
+    if ( strcmp("charger", str) == 0 )
+        g_Charger_mode = true;
+    else
+        g_Charger_mode = false;
+
+    printk("g_Charger_mode = %d\n", g_Charger_mode);
+    return 0;
+}
+__setup("androidboot.mode=", set_charger_mode);
+EXPORT_SYMBOL(g_Charger_mode);
+//ASUS_BSP Austin_T : add for kernel charger mode.
+
+//ASUS_BSP Austin_T : add for usb alert suboard status. +++
+bool g_usb_alert_mode = false;
+static int set_usb_alert_mode(char *str)
+{
+    if ( strcmp("1", str) == 0 )
+        g_usb_alert_mode = true;
+    else
+        g_usb_alert_mode = false;
+
+    printk("g_usb_alert_mode = %d\n", g_usb_alert_mode);
+    return 0;
+}
+__setup("androidboot.thermal.alert=", set_usb_alert_mode);
+EXPORT_SYMBOL(g_usb_alert_mode);
+//ASUS_BSP Austin_T : add for usb alert suboard status.
+
+//+++ ASUS_BSP : miniporting : Add for audio dbg mode
+int g_ftm_mode = 0;
+EXPORT_SYMBOL(g_ftm_mode);
+
+static int set_ftm_mode(char *str)
+{
+    if ( strcmp("1", str) == 0 )
+    {
+        g_ftm_mode = 1;
+    }
+    else
+    {
+        g_ftm_mode = 0;
+    }
+    printk("androidboot.pre-ftm= %d\n",  g_ftm_mode);
+    return 0;
+}
+__setup("androidboot.pre-ftm=", set_ftm_mode);
+//--- ASUS_BSP : miniporting : Add for audio dbg mode
 /*
  * If set, this is an indication to the drivers that reset the underlying
  * device before going ahead with the initialization otherwise driver might
@@ -347,6 +531,49 @@ static int __init rdinit_setup(char *str)
 }
 __setup("rdinit=", rdinit_setup);
 
+//+++ ASUS_BSP: austin, parsing lcd unique id from aboot
+char lcd_unique_id[64] = {0};
+EXPORT_SYMBOL(lcd_unique_id);
+
+static int get_lcd_uniqueId(char *str)
+{
+	strncpy(lcd_unique_id, str, sizeof(lcd_unique_id));
+	printk("lcd_unique_id = %s\n ", lcd_unique_id);
+
+    return 0;
+}
+__setup("LCD_UNIQUE_ID=", get_lcd_uniqueId);
+//--- ASUS_BSP: austin
+
+int g_asus_lcdID = -1;
+EXPORT_SYMBOL(g_asus_lcdID);
+
+static int set_lcd_id(char *str)
+{
+	if (strcmp("CTC", str) == 0 ) {
+		g_asus_lcdID = ZE552KL_LCD_CTC;
+		printk("LCD ID = CTC\n");
+	} else if (strcmp("TM5P2", str) == 0 ){
+		g_asus_lcdID = ZE520KL_LCD_TM;
+		printk("LCD ID = TM5P2\n");
+	} else if (strcmp("TM5P5", str) == 0 ){
+		g_asus_lcdID = ZE552KL_LCD_TM;
+		printk("LCD ID = TM5P5\n");
+	} else if (strcmp("BOE", str) == 0 ){
+		g_asus_lcdID = ZE520KL_LCD_BOE;
+		printk("LCD ID = BOE\n");
+	} else if (strcmp("TXD5P5", str) == 0 ){
+		g_asus_lcdID = ZE552KL_LCD_TXD;
+		printk("LCD ID = TXD5P5\n");
+	} else if (strcmp("LCE5P5", str) == 0 ){
+		g_asus_lcdID = ZE552KL_LCD_LCE;
+		printk("LCD ID = LCE5P5\n");
+	}
+
+	printk("g_asus_lcdID = %d\n" , g_asus_lcdID);
+    return 0;
+}
+__setup("PANEL=", set_lcd_id);
 #ifndef CONFIG_SMP
 static const unsigned int setup_max_cpus = NR_CPUS;
 #ifdef CONFIG_X86_LOCAL_APIC
@@ -771,14 +998,22 @@ static int __init_or_module do_one_initcall_debug(initcall_t fn)
 	unsigned long long duration;
 	int ret;
 
-	printk(KERN_DEBUG "calling  %pF @ %i\n", fn, task_pid_nr(current));
+	if (initcall_debug)
+		printk(KERN_DEBUG "calling  %pF @ %i\n", fn, task_pid_nr(current));
 	calltime = ktime_get();
 	ret = fn();
 	rettime = ktime_get();
 	delta = ktime_sub(rettime, calltime);
 	duration = (unsigned long long) ktime_to_ns(delta) >> 10;
-	printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
-		 fn, ret, duration);
+	if (initcall_debug)
+		printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
+			 fn, ret, duration);
+
+	if (initcall_debug == 0) {
+		if (duration > 100000)
+			printk(KERN_WARNING "[debuginit] initcall %pF returned %d after %lld usecs\n", fn,
+				ret, duration);
+	}
 
 	return ret;
 }
@@ -792,10 +1027,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
-	if (initcall_debug)
-		ret = do_one_initcall_debug(fn);
-	else
-		ret = fn();
+	ret = do_one_initcall_debug(fn);
 
 	msgbuf[0] = 0;
 

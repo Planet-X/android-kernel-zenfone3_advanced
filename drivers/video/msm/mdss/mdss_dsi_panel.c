@@ -21,7 +21,18 @@
 #include <linux/leds.h>
 #include <linux/qpnp/pwm.h>
 #include <linux/err.h>
+//ASUS BSP Display +++
 #include <linux/string.h>
+#include <linux/msm_mdp.h>
+#include <linux/syscalls.h>
+#include <linux/proc_fs.h>
+#include "mdss_panel.h"
+#include <linux/kernel.h>
+#include <linux/workqueue.h>
+#include <linux/kernel.h>
+#include <linux/file.h>
+#include <linux/uaccess.h>
+//ASUS BSP Display ---
 
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
@@ -31,11 +42,298 @@
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 48
 #define DEFAULT_MDP_TRANSFER_TIME 14000
+#define WLED_MAX_LEVEL_ENABLE 4095
+#define WLED_MIN_LEVEL_DISABLE 0
+#define R63350_BL_THRESHOLD 11
+#define ILI7807B_BL_THRESHOLD 41
 
 #define VSYNC_DELAY msecs_to_jiffies(17)
 
+//nancy +++
+extern void ftxxxx_ts_suspend(void);
+extern void ftxxxx_ts_resume(void);
+//nancy ---
+
+
 DEFINE_LED_TRIGGER(bl_led_trigger);
 
+//ASUS BSP Display +++
+extern char lcd_unique_id[64];
+extern struct mdss_panel_data *g_mdss_pdata;
+extern int g_ftm_mode;
+
+void set_tcon_cmd(char *cmd, short len);
+void get_tcon_cmd(char cmd, int rlen);
+void set_bl_dcs_cmd(char *cmd, short len);
+static struct mutex cmd_mutex;
+static struct mutex bl_cmd_mutex;
+char bl_cmd[2] = {0x51, 0x64};
+char dimming_cmd[2] = {0x53, 0x2C};
+char ctc_bl_cmd[3] = {0x51, 0xFF, 0xFF};
+char tm_bl_cmd[2] = {0x51, 0xFF};
+char cabc_mode[2] = {0x55, Still_MODE};
+char cabc_dim_off_cmd[2] = {0xCE, 0x00};
+char cabc_dim_on_cmd[2] = {0xCE, 0x50};
+static struct panel_list supp_panels[] = {
+	{"BOE5P2", ZE520KL_LCD_BOE},
+	{"CTC5P5", ZE552KL_LCD_CTC},
+	{"TM5P2", ZE520KL_LCD_TM},
+	{"TM5P5", ZE552KL_LCD_TM},
+	{"TXD5P5", ZE552KL_LCD_TXD},
+	{"LCE5P5", ZE552KL_LCD_LCE},
+};
+
+char g_reg_buffer[256];
+char g_bl_buffer[256];
+
+static void display_func(struct work_struct *);
+static DECLARE_DELAYED_WORK(display_work, display_func);
+static struct workqueue_struct *display_workqueue;
+
+static DEFINE_SPINLOCK(bklt_lock);
+static bool g_timer = false;
+static bool bl_wled_enable = false;
+static bool cabc_first_boot = true;
+static int g_previous_bl = 0x0;
+static int g_last_bl = 0x0;
+static int g_bl_threshold;
+static int g_wled_dimming_div;
+static int mdss_first_boot = 1;
+extern int display_commit_cnt;
+extern u32 g_update_bl;
+//ASUS BSP Display ---
+
+//ASUS BSP Display, dynamic calibration backlight +++
+#define BL_LIBRA_DEFAULT 610
+#define BL_LEO_DEFAULT 660
+#define BL_BOUNDARY_VAL 12
+#define LCD_CALIBRATION_PATH "/factory/lcd_calibration.ini"
+#define BL_CALIBRATION_PATH "/data/data/bl_adjust"
+#define SHIFT_MASK 23
+
+#define ON "on"
+uint8_t g_lcd_uniqueId_crc = -1;
+int g_asus_lcdID_verify = 0;
+int g_calibrated_bl = -1;
+int g_actual_bl = -1;
+int g_adjust_bl = 0;
+bool mdss_libra_panel = true;
+int g_dcs_bl_value = 0x3A; //default bl value
+
+static mm_segment_t oldfs;
+
+static void initKernelEnv(void)
+{
+    oldfs = get_fs();
+    set_fs(KERNEL_DS);
+}
+
+static void deinitKernelEnv(void)
+{
+    set_fs(oldfs);
+}
+
+typedef void (*lcd_func)( const char *msg, int index);
+
+struct lcd_command{
+    char *id;
+    int len;
+    const lcd_func func;
+};
+
+int lcd_calculate_backlight_float(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4)
+{
+    unsigned int raw_data, mantissa;
+    int mantissa_val=0;
+    int exp, i, float_bl = -1;
+
+    raw_data = (byte1<<24) | (byte2<<16) | (byte3<<8) | byte4;
+
+    exp = ((raw_data & 0x7F800000) >> SHIFT_MASK);
+    exp = exp - 127;
+
+    mantissa = raw_data & 0x7FFFFF;
+    for(i=0; i<=SHIFT_MASK; i++) {    /*bit 23 = 1/2, bit 22 = 1/4*/
+        if ((mantissa >> (SHIFT_MASK - i)) & 0x01)
+            mantissa_val += 100000/(0x01 << i);
+    }
+
+    float_bl = (0x01 << exp) + ((0x01 << exp) * mantissa_val / 100000);
+
+	return float_bl;
+}
+
+bool lcd_adjust_backlight(uint8_t byte1, uint8_t byte2, uint8_t byte3, uint8_t byte4, uint8_t byte5)
+{
+    unsigned int readstr;
+    unsigned int asus_lcdID;
+    int readlen =0;
+    struct inode *inode;
+    struct file *fp = NULL;
+    unsigned char *buf = NULL;
+
+    sscanf(lcd_unique_id, "%x", &readstr);
+    asus_lcdID = ((readstr>>24) ^ 0x55 ^ (readstr>>16) ^ (readstr>>8) ^ (readstr)) & 0xff;
+
+    printk("[Display] Panel Unique ID from Phone: 0x%x\n", asus_lcdID);
+    printk("[Display] Panel Unique ID from File : 0x%x\n", byte1);
+	
+   g_actual_bl = 	lcd_calculate_backlight_float( byte2, byte3, byte4, byte5);
+    printk("[Display] Actual Panel Backlight value = %d \n", g_actual_bl);
+
+    if (asus_lcdID == byte1) {
+        initKernelEnv();
+        fp = filp_open(BL_CALIBRATION_PATH, O_RDONLY, 0);
+        if (!IS_ERR_OR_NULL(fp)) {
+            inode = fp->f_dentry->d_inode;
+            buf = kmalloc(inode->i_size, GFP_KERNEL);
+
+            if (fp->f_op != NULL && fp->f_op->read != NULL) {
+                readlen = fp->f_op->read(fp, buf, inode->i_size, &(fp->f_pos));
+                buf[readlen] = '\0';
+            }
+            sscanf(buf, "%d", &g_adjust_bl);
+            printk("[Display] Dynamic calibration Backlight value = %d\n", g_adjust_bl);
+
+            g_asus_lcdID_verify = 1;
+            deinitKernelEnv();
+            filp_close(fp, NULL);
+            kfree(buf);
+        } else {
+        	if (g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE552KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TXD || g_asus_lcdID == ZE552KL_LCD_LCE) {
+			g_adjust_bl = BL_LIBRA_DEFAULT;
+			mdss_libra_panel = true;
+		} else { 
+			g_adjust_bl = BL_LEO_DEFAULT;
+			mdss_libra_panel = false;
+		}
+		
+            pr_err("[Display] Dynamic calibration Backlight disable\n");
+            return false;
+        }
+    } else
+        return false;
+
+    return true;
+}
+
+bool lcd_read_calibration_file(void)
+{
+    int ret;
+    int readlen =0;
+    off_t fsize;
+    struct file *fp = NULL;
+    struct inode *inode;
+    uint8_t *buf = NULL;
+
+    initKernelEnv();
+
+    fp = filp_open(LCD_CALIBRATION_PATH, O_RDONLY, 0);
+    if (IS_ERR_OR_NULL(fp)) {
+        pr_err("[Display] Read (%s) failed\n", LCD_CALIBRATION_PATH);
+        return false;
+    }
+
+    inode = fp->f_dentry->d_inode;
+    fsize = inode->i_size;
+    buf = kmalloc(fsize, GFP_KERNEL);
+
+    if (fp->f_op != NULL && fp->f_op->read != NULL) {
+        readlen = fp->f_op->read(fp, buf, fsize, &(fp->f_pos));
+        if (readlen < 0) {
+            DEV_ERR("[Display] Read (%s) error\n", LCD_CALIBRATION_PATH);
+            deinitKernelEnv();
+            filp_close(fp, NULL);
+            kfree(buf);
+            return false;
+        }
+    } else
+        pr_err("[Display] Read (%s) f_op=NULL or op->read=NULL\n", LCD_CALIBRATION_PATH);
+
+    deinitKernelEnv();
+    filp_close(fp, NULL);
+
+    //g_calibrated_bl = (buf[60]<<8) + buf[61];
+
+	g_calibrated_bl = lcd_calculate_backlight_float( buf[102], buf[101], buf[100], buf[99]);
+        printk("[Display] Panel Calibrated Backlight: %d\n", g_calibrated_bl);
+	g_lcd_uniqueId_crc = buf[5];
+
+    ret = lcd_adjust_backlight(buf[5], buf[55], buf[54], buf[53], buf[52]);
+    if(!ret)
+        g_asus_lcdID_verify = 0;
+
+    kfree(buf);
+    return true;
+}
+
+void lcd_bl_calibration(const char *msg, int index)
+{
+    int ret;
+    ret = lcd_read_calibration_file();
+    if(!ret)
+        pr_err("[Display] Dynamic Calibration Backlight disable\n");
+}
+
+struct lcd_command lcd_cmd_tb[] = {
+    {ON, sizeof(ON), lcd_bl_calibration},		/*do calibration*/
+    //{BL, sizeof(BL), lcd_read_bl},		/*read backlight*/
+};
+
+static void lcd_write(char *msg)
+{
+    int i = 0;
+    for(; i<ARRAY_SIZE(lcd_cmd_tb);i++){
+        if(strncmp(msg, lcd_cmd_tb[i].id, lcd_cmd_tb[i].len-1)==0){
+            lcd_cmd_tb[i].func(msg, lcd_cmd_tb[i].len-1);
+            return;
+        }
+    }
+    pr_err("### error Command no found in  %s ###\n", __FUNCTION__);
+    return;
+}
+
+static ssize_t lcd_info_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages[256];
+
+    memset(messages, 0, sizeof(messages));
+
+    if (len > 256)
+        len = 256;
+    if (copy_from_user(messages, buff, len))
+        return -EFAULT;
+
+    pr_info("[Dislay] ### %s ###\n", __func__);
+
+    lcd_write(messages);
+
+    return len;
+}
+
+static ssize_t lcd_info_read(struct file *file, char __user *buf,
+                             size_t count, loff_t *ppos)
+{
+    int len = 0;
+    ssize_t ret = 0;
+    char *buff;
+
+    buff = kmalloc(512, GFP_KERNEL);
+    if (!buff)
+        return -ENOMEM;
+
+    len += sprintf(buff, "===================\nPanel Vendor: %s\nUnique ID: %s\nUnique ID after CRC: %x\nSW Calibration Enable: %s\nCalibrated Value: %d\nActual Backlight: %d\nAdjust Backlight: %d\nCABC Mode: %d\n===================\n", supp_panels[g_asus_lcdID].name, lcd_unique_id, g_lcd_uniqueId_crc, g_asus_lcdID_verify ? "Y" : "N", g_calibrated_bl, g_actual_bl, g_adjust_bl, cabc_mode[1]);
+    ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+    kfree(buff);
+
+    return ret;
+}
+
+static struct file_operations lcd_info_proc_ops = {
+    .write = lcd_info_write,
+    .read = lcd_info_read,
+};
+//ASUS BSP Display, dynamic calibration backlight ---
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	if (ctrl->pwm_pmi)
@@ -211,32 +509,101 @@ static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 }
 
 static char led_pwm1[2] = {0x51, 0x0};	/* DTYPE_DCS_WRITE1 */
-static struct dsi_cmd_desc backlight_cmd = {
-	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(led_pwm1)},
-	led_pwm1
+static char led_pwm_ctc[3] = {0x51, 0x00, 0x00}; /*austin +++*/
+static struct dsi_cmd_desc backlight_cmd[] = {
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(cabc_dim_off_cmd)}, cabc_dim_off_cmd},
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 50, sizeof(led_pwm1)}, led_pwm1},
+	{{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(cabc_dim_on_cmd)},cabc_dim_on_cmd},
 };
+static struct dsi_cmd_desc ctc_backlight_cmd = {
+	{DTYPE_DCS_LWRITE, 1, 0, 0, 1, sizeof(led_pwm_ctc)},
+	led_pwm_ctc
+};
+
+int bl_level_shift = 0;
 
 static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 {
 	struct dcs_cmd_req cmdreq;
 	struct mdss_panel_info *pinfo;
+	int tmp_level = 0;
+#ifndef ASUS_FACTORY_BUILD
+	static bool g_bl_first_bootup = true;
+    int rc;
+#endif
 
 	pinfo = &(ctrl->panel_data.panel_info);
 	if (pinfo->dcs_cmd_by_left) {
 		if (ctrl->ndx != DSI_CTRL_LEFT)
 			return;
 	}
+	
+#ifndef ASUS_FACTORY_BUILD
+    if (g_bl_first_bootup) {
+        rc = lcd_read_calibration_file();
+        if(!rc)
+            pr_err("%s: Backlight calibration read failed\n", __func__);
+        g_bl_first_bootup = false;
+    }
+#endif
+		
+	tmp_level = level;		
+		
+#ifndef ASUS_FACTORY_BUILD
+    if ((g_adjust_bl < g_calibrated_bl) && (g_adjust_bl > 0))
+        level = level * g_adjust_bl / g_calibrated_bl;
+#endif
 
-	pr_debug("%s: level=%d\n", __func__, level);
+	if (level < pinfo->bl_min)
+		level = pinfo->bl_min;
 
-	led_pwm1[1] = (unsigned char)level;
+	if ((g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_LCE || g_asus_lcdID == ZE552KL_LCD_TXD) && level <= ILI7807B_BL_THRESHOLD && level > 0)
+		level =ILI7807B_BL_THRESHOLD;
+	else if ((g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM) && level <= R63350_BL_THRESHOLD &&  level > 0)	
+		level =R63350_BL_THRESHOLD;	
+		
 
-	memset(&cmdreq, 0, sizeof(cmdreq));
-	cmdreq.cmds = &backlight_cmd;
-	cmdreq.cmds_cnt = 1;
-	cmdreq.flags = CMD_REQ_COMMIT;
-	cmdreq.rlen = 0;
-	cmdreq.cb = NULL;
+	printk("[Display] Set %s brightness (Actual:%d) (Adjust:%d)\n", supp_panels[g_asus_lcdID].name, tmp_level, level);
+
+	//pr_debug("%s:[DISPLAY] level=%d \n", __func__, level);
+
+	if (g_asus_lcdID == ZE552KL_LCD_LCE) {
+		led_pwm_ctc[1] = (unsigned char) (level >> 2 ) & 0xFF; //10bit
+		led_pwm_ctc[2] = (unsigned char) ((level << 2) & 0x0C) | 0x03;
+		//led_pwm_ctc[1] = (unsigned char) (level >> 4 ) & 0xFF; //12bit
+		//led_pwm_ctc[2] = (unsigned char) (level) & 0x0F;
+		printk("%s::[DISPLAY]LCE level(%x) level(%x) \n", __func__, led_pwm_ctc[1], led_pwm_ctc[2]);
+		memset(&cmdreq, 0, sizeof(cmdreq));
+		cmdreq.cmds = &ctc_backlight_cmd;
+		cmdreq.cmds_cnt = 1;
+		cmdreq.flags = CMD_REQ_COMMIT;
+		cmdreq.rlen = 0;
+		cmdreq.cb = NULL;
+
+	} else if (g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_TXD) {
+		led_pwm_ctc[1] = (unsigned char) (level >> (8 - bl_level_shift));
+		led_pwm_ctc[2] = (unsigned char) (level << bl_level_shift);
+
+		printk("%s::[DISPLAY]CTC level(%x) level(%x) \n", __func__, led_pwm_ctc[1], led_pwm_ctc[2]);
+		memset(&cmdreq, 0, sizeof(cmdreq));
+		cmdreq.cmds = &ctc_backlight_cmd;
+		cmdreq.cmds_cnt = 1;
+		cmdreq.flags = CMD_REQ_COMMIT;
+		cmdreq.rlen = 0;
+		cmdreq.cb = NULL;
+
+	} else {
+		printk("%s::[DISPLAY] TM level(%d)\n", __func__, level);
+
+		led_pwm1[1] = (unsigned char)level;
+
+		memset(&cmdreq, 0, sizeof(cmdreq));
+		cmdreq.cmds = backlight_cmd;
+		cmdreq.cmds_cnt = 3;
+		cmdreq.flags = CMD_REQ_COMMIT;
+		cmdreq.rlen = 0;
+		cmdreq.cb = NULL;
+	}
 
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
@@ -783,6 +1150,14 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_dsi_ctrl_pdata *sctrl = NULL;
+	struct dsi_panel_cmds *on_cmds = NULL;
+	struct dsi_ctrl_hdr *dchdr;
+	bool bl_wled_ctrl = false;
+	char *bp;
+	int i, len;
+	int temp;
+
+	static bool wq = false;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -791,6 +1166,49 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
+
+	if (cabc_first_boot) {
+		if (g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM) {
+			on_cmds = &ctrl_pdata->on_cmds;
+			bp = on_cmds->buf;
+			len = on_cmds->blen;
+
+			for (i = 0; i < on_cmds->cmd_cnt; i++) {
+				dchdr = (struct dsi_ctrl_hdr *)bp;
+				len -= sizeof(*dchdr);
+				bp += sizeof(*dchdr);
+				if (bp[0] == 0xCE) {
+					printk("[Display] %s:: TM CABC DIM_MODE = 0x%x\n", __func__, bp[1]);
+					cabc_dim_off_cmd[1] = bp[1] & 0x0F;
+					cabc_dim_on_cmd[1] = bp[1];
+				}
+				bp += dchdr->dlen;
+				len -= dchdr->dlen;
+			}
+		}
+		cabc_first_boot = false;
+	}
+
+	spin_lock(&bklt_lock);
+	if (g_previous_bl == 0) {
+		g_timer = true;
+		wq = true;
+	} else
+		wq = false;
+	g_previous_bl = bl_level;
+	spin_unlock(&bklt_lock);
+
+	if (wq) {
+		if (display_commit_cnt == 5)
+			queue_delayed_work(display_workqueue, &display_work, msecs_to_jiffies(16));
+		else
+			queue_delayed_work(display_workqueue, &display_work, 0);
+	}
+
+	if (g_timer)
+		return;
+
+    bl_level = g_update_bl; /* ASUS BSP Display, to fix workqueue's timing issue*/
 
 	/*
 	 * Some backlight controllers specify a minimum duty cycle
@@ -801,16 +1219,42 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
 		bl_level = pdata->panel_info.bl_min;
 
+	if (bl_level >= g_bl_threshold)
+		bl_wled_ctrl =false;
+	else 
+		bl_wled_ctrl =true;
+
+mutex_lock(&bl_cmd_mutex);
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
+		printk("[Display] %s:: BL_WLED level(%d)\n", __func__, bl_level);
 		led_trigger_event(bl_led_trigger, bl_level);
 		break;
 	case BL_PWM:
 		mdss_dsi_panel_bklt_pwm(ctrl_pdata, bl_level);
 		break;
 	case BL_DCS_CMD:
+
+	if (!bl_wled_ctrl) {
+			
 		if (!mdss_dsi_sync_wait_enable(ctrl_pdata)) {
-			mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+			if ( g_last_bl)
+				mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+			if (bl_level && !bl_wled_enable) {
+				if ( g_last_bl) {
+					for (temp=0;temp<=g_wled_dimming_div;temp++) {
+						led_trigger_event(bl_led_trigger, 4095*g_last_bl/g_bl_threshold+( (4095*(g_bl_threshold-g_last_bl) / g_bl_threshold/ g_wled_dimming_div) *temp));
+						msleep(10);
+					}
+				} else {
+					led_trigger_event(bl_led_trigger, WLED_MAX_LEVEL_ENABLE);	
+					mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+					}	
+				printk("[DISPLAY] %s:: bl_wled_enable ctrl enable \n", __func__);
+				bl_wled_enable = true;
+			}
+
+	
 			break;
 		}
 		/*
@@ -831,12 +1275,58 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			if (sctrl)
 				mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
 		}
+		} else {
+			 if (bl_level == 0) {
+					led_trigger_event(bl_led_trigger, WLED_MIN_LEVEL_DISABLE);	
+					printk("[DISPLAY] %s:: bl_wled_enable ctrl disable \n", __func__);
+					if (!mdss_dsi_sync_wait_enable(ctrl_pdata))
+						mdss_dsi_panel_bklt_dcs(ctrl_pdata, 0);
+					bl_wled_enable = false;
+			 }  else {
+					bl_wled_enable = false;
+					if ( g_last_bl) {
+						if (!mdss_dsi_sync_wait_enable(ctrl_pdata))
+							mdss_dsi_panel_bklt_dcs(ctrl_pdata, g_bl_threshold);
+						}
+					
+					if (g_last_bl == 0) {
+							printk("%s::[DISPLAY] system resume set BL wled directly\n", __func__);
+							led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold);
+							if (!mdss_dsi_sync_wait_enable(ctrl_pdata))
+								mdss_dsi_panel_bklt_dcs(ctrl_pdata, g_bl_threshold);
+					} else if ((bl_level < g_last_bl) && g_last_bl >= g_bl_threshold) {			
+								for (temp=g_wled_dimming_div;temp>=0;temp--) {
+									led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold +( (4095*(g_bl_threshold-bl_level) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+					}else if (bl_level < g_last_bl ) {
+								for (temp=g_wled_dimming_div;temp>=0;temp--) {
+									led_trigger_event(bl_led_trigger, 4095*bl_level/g_bl_threshold +( (4095*(g_last_bl-bl_level) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+					}else if (g_last_bl < bl_level) {
+								for (temp=0;temp<=g_wled_dimming_div;temp++) {
+									led_trigger_event(bl_led_trigger, 4095*g_last_bl/g_bl_threshold+( (4095*(bl_level-g_last_bl) / g_bl_threshold / g_wled_dimming_div) *temp));
+									msleep(10);
+								}
+
+					} else
+							printk("%s:: [DISPLAY] set BL error \n", __func__);
+
+						
+		}
+			 	
+			}
+
 		break;
 	default:
 		pr_err("%s: Unknown bl_ctrl configuration\n",
 			__func__);
 		break;
 	}
+
+		g_last_bl = bl_level;
+	mutex_unlock(&bl_cmd_mutex);	
 }
 
 #ifdef TARGET_HW_MDSS_HDMI
@@ -853,6 +1343,11 @@ static void mdss_dsi_panel_on_hdmi(struct mdss_dsi_ctrl_pdata *ctrl,
 	(void)(*ctrl);
 	(void)(*pinfo);
 }
+#endif
+
+#ifdef CONFIG_QPNP_FG_SUSPEND_PREDICT
+void bms_modify_soc_early_suspend(void);
+void bms_modify_soc_late_resume(void);
 #endif
 
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
@@ -872,6 +1367,7 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 				panel_data);
 
 	pr_debug("%s: ndx=%d\n", __func__, ctrl->ndx);
+	printk("[Display] %s: ++\n", __func__);
 
 	if (pinfo->dcs_cmd_by_left) {
 		if (ctrl->ndx != DSI_CTRL_LEFT)
@@ -893,13 +1389,22 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	if (pinfo->compression_mode == COMPRESSION_DSC)
 		mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
 
+	ftxxxx_ts_resume();/*nancy+++*/
+
+
 	mdss_dsi_panel_on_hdmi(ctrl, pinfo);
 
 	/* Ensure low persistence mode is set as before */
 	mdss_dsi_panel_apply_display_setting(pdata, pinfo->persist_mode);
 
+	/*BSP david: for gauge driver*/
+#ifdef CONFIG_QPNP_FG_SUSPEND_PREDICT
+	bms_modify_soc_late_resume();
+#endif
+
 end:
 	pr_debug("%s:-\n", __func__);
+	printk("[Display] %s: --\n", __func__);
 	return ret;
 }
 
@@ -937,6 +1442,7 @@ static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 				panel_data);
 
 	pr_debug("%s: ctrl=%pK ndx=%d\n", __func__, ctrl, ctrl->ndx);
+	printk("[Display] %s: ++\n", __func__);
 
 	pinfo = &pdata->panel_info;
 	if (pinfo->dcs_cmd_by_left && ctrl->ndx != DSI_CTRL_LEFT)
@@ -952,6 +1458,7 @@ static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 
 end:
 	pr_debug("%s:-\n", __func__);
+	printk("[Display] %s: --\n", __func__);
 	return 0;
 }
 
@@ -988,7 +1495,12 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 				panel_data);
 
 	pr_debug("%s: ctrl=%pK ndx=%d\n", __func__, ctrl, ctrl->ndx);
+	printk("[Display] %s: ++\n", __func__);
 
+	/*BSP david: for gauge driver*/
+#ifdef CONFIG_QPNP_FG_SUSPEND_PREDICT
+	bms_modify_soc_early_suspend();
+#endif
 	if (pinfo->dcs_cmd_by_left) {
 		if (ctrl->ndx != DSI_CTRL_LEFT)
 			goto end;
@@ -1003,6 +1515,7 @@ end:
 	/* clear idle state */
 	ctrl->idle = false;
 	pr_debug("%s:-\n", __func__);
+	printk("[Display] %s: --\n", __func__);
 	return 0;
 }
 
@@ -1033,6 +1546,414 @@ static int mdss_dsi_panel_low_power_config(struct mdss_panel_data *pdata,
 	pr_debug("%s:-\n", __func__);
 	return 0;
 }
+
+//ASUS BSP Display, Panel debug control interface +++
+#define LCD_REGISTER_RW         "driver/panel_reg_rw"
+#define CABC_PROC_FILE   		"driver/cabc"
+#define BKLT_PROC_FILE          "driver/bl"
+//asutin+++
+#define DUMP_CALIBRATION_INFO   "driver/panel_info"
+#define ZE552KL_LCD_UNIQUE_ID   "lcd_unique_id"
+#define ZE552KL_LCD_ID		"lcd_id"
+//austin---
+
+static void display_cmd_callback(void)
+{
+    if (g_previous_bl) {
+
+	if(mdss_first_boot && g_ftm_mode) {
+		set_tcon_cmd(cabc_mode, ARRAY_SIZE(cabc_mode));
+		mdss_first_boot--;
+	}
+	g_timer = false;
+		set_tcon_cmd(cabc_mode, ARRAY_SIZE(cabc_mode));
+        mdss_dsi_panel_bl_ctrl(g_mdss_pdata, g_previous_bl);
+        msleep(32);
+        set_tcon_cmd(dimming_cmd, ARRAY_SIZE(dimming_cmd));
+    }
+}
+
+static void display_func(struct work_struct *ws)
+{
+    display_cmd_callback();
+}
+
+//+++ ASUS BSP Display: ensure dcs commands are first sent to the non-trigger controller
+void set_bl_dcs_cmd(char *cmd, short len)
+{
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct mdss_dsi_ctrl_pdata *sctrl = NULL;
+
+    ctrl_pdata = container_of(g_mdss_pdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    if (!mdss_dsi_sync_wait_enable(ctrl_pdata)) {
+        set_tcon_cmd(cmd, len);
+        return;
+    }
+    /*
+     * DCS commands to update backlight are usually sent at
+     * the same time to both the controllers. However, if
+     * sync_wait is enabled, we need to ensure that the
+     * dcs commands are first sent to the non-trigger
+     * controller so that when the commands are triggered,
+     * both controllers receive it at the same time.
+     */
+    sctrl = mdss_dsi_get_other_ctrl(ctrl_pdata);
+    if (mdss_dsi_sync_wait_trigger(ctrl_pdata)) {
+        if (sctrl)
+            set_tcon_cmd(cmd, len);
+        set_tcon_cmd(cmd, len);
+    } else {
+        set_tcon_cmd(cmd, len);
+        if (sctrl)
+            set_tcon_cmd(cmd, len);
+    }
+}
+EXPORT_SYMBOL(set_bl_dcs_cmd);
+//--- ASUS BSP Display: ensure dcs commands are first sent to the non-trigger controller
+
+static void dump_register_cb(int len) {
+}
+
+static void bl_calculate(struct dcs_cmd_req *cmdreq)
+{
+    int max = 255;
+    int value = 0;
+    memset(g_bl_buffer, 0, 256*sizeof(char));
+
+    if (g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_TXD) {
+        max = 4095;
+        value = (*(cmdreq->rbuf+0) << 8) +(*(cmdreq->rbuf+1));
+        snprintf (g_bl_buffer, sizeof(g_bl_buffer),
+                  "BL = %d\nMAX BL = %d\nPWM duty= %d%%\nFramework BL = %d\n",
+                  value, max, (value*100/max), g_previous_bl);
+    } else { /*TM panel*/
+        max = 255;
+        value = *(cmdreq->rbuf+0);
+        snprintf (g_bl_buffer, sizeof(g_bl_buffer),
+                  "BL = %d\nMAX BL = %d\nPWM duty= %d%%\nFramework BL = %d\n",
+                  value, max, (value*100/max), g_previous_bl);
+    }/*TO-DO for LCE case*/
+}
+
+#define PANEL_CMD 0
+
+void set_tcon_cmd(char *cmd, short len)
+{
+    struct dcs_cmd_req cmdreq;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    struct dsi_cmd_desc tcon_cmd = {
+        {DTYPE_DCS_WRITE1, 1, 0, 0, 1, len}, cmd};
+    int i=0;
+
+    if(len > 2)
+        tcon_cmd.dchdr.dtype = DTYPE_GEN_LWRITE;
+
+    for(i=0; i<len && PANEL_CMD; i++)
+         pr_info("[Display] cmd%d (0x%02x)\n", i, cmd[i]);
+
+    ctrl_pdata = container_of(g_mdss_pdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    mutex_lock(&cmd_mutex);
+
+    if (g_mdss_pdata->panel_info.panel_power_state == MDSS_PANEL_POWER_ON) {
+        pr_info("[Display] write parameter: 0x%02x = 0x%02x\n", cmd[0], cmd[1]);
+        memset(&cmdreq, 0, sizeof(cmdreq));
+        cmdreq.cmds = &tcon_cmd;
+        cmdreq.cmds_cnt = 1;
+        cmdreq.flags = CMD_REQ_COMMIT;
+        cmdreq.rlen = 0;
+        cmdreq.cb = NULL;
+        mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+    } else {
+        pr_err("[Display] write parameter failed\n");
+    }
+    mutex_unlock(&cmd_mutex);
+}
+EXPORT_SYMBOL(set_tcon_cmd);
+
+void get_tcon_cmd(char cmd, int rlen)
+{
+    struct dcs_cmd_req cmdreq;
+    struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+    char des_cmd[2] = {cmd, 0x00};
+    struct dsi_cmd_desc tcon_cmd = {
+        {DTYPE_DCS_READ, 1, 0, 1, 5, sizeof(des_cmd)}, des_cmd};
+    char *rbuffer;
+    char tmp[256];
+    int i = 0;
+
+    if(PANEL_CMD)
+        pr_info("[Display] cmd (0x%02x)\n", des_cmd[0]);
+
+    ctrl_pdata = container_of(g_mdss_pdata, struct mdss_dsi_ctrl_pdata,
+                panel_data);
+
+    mutex_lock(&cmd_mutex);
+
+    if (g_mdss_pdata->panel_info.panel_power_state == MDSS_PANEL_POWER_ON) {
+        memset(&cmdreq, 0, sizeof(cmdreq));
+        rbuffer = kmalloc(sizeof(ctrl_pdata->rx_buf.len), GFP_KERNEL);
+
+        cmdreq.cmds = &tcon_cmd;
+        cmdreq.cmds_cnt = 1;
+        cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+        cmdreq.rlen = rlen;   //read back rlen byte
+        cmdreq.rbuf = rbuffer;
+        cmdreq.cb = dump_register_cb;  //fxn; /* call back */
+        mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+		bl_calculate(&cmdreq); /*for reading bl & pwmDuty*/
+        for(i=0; i<rlen; i++) {
+            memset(tmp, 0, 256*sizeof(char));
+            pr_info("[Display] read parameter: 0x%02x = 0x%02x\n", des_cmd[0], *(cmdreq.rbuf+i));
+            snprintf (tmp, sizeof(tmp), "0x%02x = 0x%02x\n", des_cmd[0], *(cmdreq.rbuf+i));
+            strcat(g_reg_buffer,tmp);
+        }
+    } else {
+        pr_err("[Display] read parameter failed\n");
+    }
+
+    mutex_unlock(&cmd_mutex);
+}
+
+static ssize_t cabc_proc_write(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char messages[256];
+
+    memset(messages, 0, sizeof(messages));
+
+    if (len > 256)
+        len = 256;
+    if (copy_from_user(messages, buff, len))
+        return -EFAULT;
+
+	if(strncmp(messages, "0", 1) == 0)  //off
+        cabc_mode[1] = 0x0;
+	else if(strncmp(messages, "1", 1) == 0) //ui
+        cabc_mode[1] = 0x1;
+	else if(strncmp(messages, "2", 1) == 0) //still
+        cabc_mode[1] = 0x2;
+    else if(strncmp(messages, "3", 1) == 0) //moving
+        cabc_mode[1] = 0x3;
+
+    set_tcon_cmd(cabc_mode, ARRAY_SIZE(cabc_mode));
+
+    return len;
+}
+
+static struct file_operations cabc_proc_ops = {
+    .write = cabc_proc_write,
+};
+#define MIN_LEN 2
+#define MAX_LEN 4
+
+static ssize_t lcd_reg_rw(struct file *filp, const char *buff, size_t len, loff_t *off)
+{
+    char *messages, *tmp, *cur;
+    char *token, *token_par;
+    char *put_cmd;
+    bool flag = 0;
+    int *store;
+    int i = 0, cnt = 0, cmd_cnt = 0;
+    int ret = 0;
+    uint8_t str_len = 0;
+
+    messages = (char*) kmalloc(len*sizeof(char), GFP_KERNEL);
+    if(!messages)
+        return -EFAULT;
+
+    tmp = (char*) kmalloc(len*sizeof(char), GFP_KERNEL);
+    memset(tmp, 0, len*sizeof(char));
+    store =  (int*) kmalloc((len/MIN_LEN)*sizeof(int), GFP_KERNEL);
+    put_cmd = (char*) kmalloc((len/MIN_LEN)*sizeof(char), GFP_KERNEL);
+    memset(g_reg_buffer, 0, 256*sizeof(char));
+
+    if (copy_from_user(messages, buff, len)) {
+        ret = -1;
+        goto error;
+    }
+    cur = messages;
+    *(cur+len-1) = '\0';
+
+    pr_info("[Display] %s +++\n", __func__);
+
+    if (strncmp(cur, "w", 1) == 0) //write
+        flag = true;
+    else if(strncmp(cur, "r", 1) == 0) //read
+        flag = false;
+    else {
+        ret = -1;
+        goto error;
+    }
+
+    while ((token = strsep(&cur, "wr")) != NULL) {
+        str_len = strlen(token);
+
+        if(str_len > 0) { /*filter zero length*/
+            if(!(strncmp(token, ",", 1) == 0) || (str_len < MAX_LEN)) {
+                ret = -1;
+                goto error;
+            }
+
+            memset(store, 0, (len/MIN_LEN)*sizeof(int));
+            memset(put_cmd, 0, (len/MIN_LEN)*sizeof(char));
+            cmd_cnt++;
+
+            while ((token_par = strsep(&token, ",")) != NULL) {
+                if(strlen(token_par) > MIN_LEN) {
+                    ret = -1;
+                    goto error;
+                }
+                if(strlen(token_par)) {
+                    sscanf(token_par, "%x", &(store[cnt]));
+                    cnt++;
+                }
+            }
+
+            for(i=0; i<cnt; i++)
+                put_cmd[i] = store[i]&0xff;
+
+            if(flag) {
+                pr_info("[Display] write panel command\n");
+                set_tcon_cmd(put_cmd, cnt);
+            }
+            else {
+                pr_info("[Display] read panel command\n");
+                get_tcon_cmd(put_cmd[0], store[1]);
+            }
+
+            if(cur != NULL) {
+                if (*(tmp+str_len) == 'w')
+                    flag = true;
+                else if (*(tmp+str_len) == 'r')
+                    flag = false;
+            }
+            cnt = 0;
+        }
+
+        memset(tmp, 0, len*sizeof(char));
+
+        if(cur != NULL)
+            strcpy(tmp, cur);
+    }
+
+    if(cmd_cnt == 0) {
+        ret = -1;
+        goto error;
+    }
+
+    ret = len;
+
+error:
+    pr_err("[Display] %s(%d)  --\n", __func__, ret);
+    kfree(messages);
+    kfree(tmp);
+    kfree(store);
+    kfree(put_cmd);
+    return ret;
+
+}
+
+static ssize_t lcd_reg_read(struct file *file, char __user *buf,
+                    size_t count, loff_t *ppos)
+{
+    int len = 0;
+    ssize_t ret = 0;
+    char *buff;
+
+    buff = kmalloc(100, GFP_KERNEL);
+    if (!buff)
+        return -ENOMEM;
+
+    len += sprintf(buff, "%s\n", g_reg_buffer);
+    ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+    kfree(buff);
+
+    return ret;
+}
+
+static struct file_operations lcd_reg_rw_ops = {
+    .write = lcd_reg_rw,
+    .read = lcd_reg_read,
+};
+
+static ssize_t bl_proc_read(struct file *file, char __user *buf,
+                    size_t count, loff_t *ppos)
+{
+    int len = 0;
+    int rlen = 1; /*default rlen=1 for tm panel*/
+    ssize_t ret = 0;
+    char *buff;
+
+    if (g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_LCE || g_asus_lcdID == ZE552KL_LCD_TXD)
+        rlen = 2;
+    get_tcon_cmd(0x52, rlen);
+
+    buff = kmalloc(100, GFP_KERNEL);
+    if (!buff)
+        return -ENOMEM;
+
+    len += sprintf(buff, "%s\n", g_bl_buffer);
+    ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+    kfree(buff);
+
+    return ret;
+}
+
+static struct file_operations bl_proc_ops = {
+    .read = bl_proc_read,
+};
+//ASUS BSP Display, Panel debug control interface ---
+
+// austin+++ read lcd unique id for factory
+static ssize_t unique_id_proc_read(struct file *file, char __user *buf,
+                    size_t count, loff_t *ppos)
+{
+	int len = 0;
+	ssize_t ret = 0;
+	char *buff;
+
+	buff = kmalloc(100, GFP_KERNEL);
+	if (!buff)
+		return -ENOMEM;
+
+	len += sprintf(buff, "%s\n", lcd_unique_id);
+	ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+	kfree(buff);
+
+	return ret;
+}
+
+static struct file_operations lcd_uniqueID_proc_ops = {
+    .read = unique_id_proc_read,
+};
+// austin--- read lcd unique id for factory
+
+// read lcd id info +++
+static ssize_t id_proc_read(struct file *file, char __user *buf,
+                    size_t count, loff_t *ppos)
+{
+	int len = 0;
+	ssize_t ret = 0;
+	char *buff;
+
+	buff = kmalloc(100, GFP_KERNEL);
+	if (!buff)
+		return -ENOMEM;
+
+	len += sprintf(buff, "%x\n", g_asus_lcdID);
+	ret = simple_read_from_buffer(buf, count, ppos, buff, len);
+	kfree(buff);
+
+	return ret;
+}
+
+static struct file_operations lcd_id_proc_ops = {
+    .read = id_proc_read,
+};
+// read lcd id info ---
 
 static void mdss_dsi_parse_trigger(struct device_node *np, char *trigger,
 		char *trigger_key)
@@ -2276,6 +3197,8 @@ int mdss_panel_parse_bl_settings(struct device_node *np,
 								 __func__);
 			}
 		} else if (!strcmp(data, "bl_ctrl_dcs")) {
+			led_trigger_register_simple("bkl-trigger",
+				&bl_led_trigger); //austin +++ for wled register 
 			ctrl_pdata->bklt_ctrl = BL_DCS_CMD;
 			pr_debug("%s: Configured DCS_CMD bklt ctrl\n",
 								__func__);
@@ -2328,7 +3251,7 @@ int mdss_dsi_panel_timing_switch(struct mdss_dsi_ctrl_pdata *ctrl,
 
 void mdss_dsi_unregister_bl_settings(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	if (ctrl_pdata->bklt_ctrl == BL_WLED)
+	if (ctrl_pdata->bklt_ctrl == BL_WLED || bl_wled_enable)
 		led_trigger_unregister_simple(bl_led_trigger);
 }
 
@@ -2598,6 +3521,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	const char *data;
 	static const char *pdest;
 	struct mdss_panel_info *pinfo = &(ctrl_pdata->panel_data.panel_info);
+	int bl_level_tmp;
 
 	if (mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data))
 		pinfo->is_split_display = true;
@@ -2663,6 +3587,18 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	pinfo->bl_max = (!rc ? tmp : 255);
 	ctrl_pdata->bklt_max = pinfo->bl_max;
 
+	bl_level_tmp = pinfo->bl_max + 1;
+	
+	while (bl_level_tmp%256 == 0 && (g_asus_lcdID == ZE552KL_LCD_CTC || g_asus_lcdID == ZE520KL_LCD_BOE || g_asus_lcdID == ZE552KL_LCD_TXD) ) {
+		bl_level_tmp /= 2;
+		bl_level_shift++;
+		if (bl_level_tmp == 256) {
+			bl_level_shift = 4 - bl_level_shift;
+			printk("[DISPLAY]%s::bl_level_shift (%d)\n", __func__,  bl_level_shift);
+			break;
+		}
+	}
+	
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-interleave-mode", &tmp);
 	pinfo->mipi.interleave_mode = (!rc ? tmp : 0);
 
@@ -2884,5 +3820,35 @@ int mdss_dsi_panel_init(struct device_node *node,
 			mdss_dsi_panel_apply_display_setting;
 	ctrl_pdata->switch_mode = mdss_dsi_panel_switch_mode;
 	ctrl_pdata->panel_data.get_idle = mdss_dsi_panel_get_idle_mode;
+
+	if(g_ftm_mode) {
+		printk("%s:: Factory Mode CABC off \n", __func__);
+		cabc_mode[1] = OFF_MODE;
+	}
+//ASUS BSP Display +++
+    mutex_init(&cmd_mutex);
+    mutex_init(&bl_cmd_mutex);	
+    proc_create(CABC_PROC_FILE, 0777, NULL, &cabc_proc_ops);
+    proc_create(LCD_REGISTER_RW, 0640, NULL, &lcd_reg_rw_ops);
+    proc_create(ZE552KL_LCD_UNIQUE_ID, 0444, NULL, &lcd_uniqueID_proc_ops);
+    proc_create(ZE552KL_LCD_ID, 0444, NULL, &lcd_id_proc_ops);
+    proc_create(BKLT_PROC_FILE, 0444, NULL, &bl_proc_ops);
+	//ASUS BSP austin +++
+    proc_create(DUMP_CALIBRATION_INFO, 0666, NULL, &lcd_info_proc_ops);
+    //ASUS BSP austin ---
+
+	if ( (g_asus_lcdID == ZE520KL_LCD_TM || g_asus_lcdID == ZE552KL_LCD_TM) ) {
+		g_bl_threshold = R63350_BL_THRESHOLD;
+		g_wled_dimming_div = 20;
+		printk("%s:: TM g_bl_threshold(%d) g_wled_dimming_div(%d)\n", __func__, g_bl_threshold, g_wled_dimming_div);
+	} else {
+		g_bl_threshold = ILI7807B_BL_THRESHOLD;
+		g_wled_dimming_div = 10;
+		printk("%s:: CTC or LCE1911 g_bl_threshold(%d) g_wled_dimming_div(%d)\n", __func__, g_bl_threshold, g_wled_dimming_div);
+	}
+
+
+    display_workqueue = create_workqueue("display_wq");
+//ASUS BSP Display ---
 	return 0;
 }

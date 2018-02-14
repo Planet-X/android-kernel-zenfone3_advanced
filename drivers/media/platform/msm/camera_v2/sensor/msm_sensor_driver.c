@@ -10,7 +10,7 @@
  * GNU General Public License for more details.
  */
 
-#define SENSOR_DRIVER_I2C "camera"
+#define SENSOR_DRIVER_I2C "i2c_camera"
 /* Header file declaration */
 #include "msm_sensor.h"
 #include "msm_sd.h"
@@ -18,6 +18,27 @@
 #include "msm_cci.h"
 #include "msm_camera_dt_util.h"
 
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+
+//ASUS_BSP Stimber_Hsueh +++
+#include <media/v4l2-subdev.h>
+#define TSB_OTP_DATA_SIZE		0x24
+#define SENSOR_MAX_RETRIES      50 
+#define REAR_MODULE_OTP_SIZE 482
+static char rear_module_otp[REAR_MODULE_OTP_SIZE];
+#define MODULE_OTP_BULK_SIZE 32
+#define MODULE_OTP_BULK 3
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP +++ PJ "implement frontCam OTP"
+#define FRONT_MODULE_OTP_SIZE 482
+#define MODULE_OTP_SIZE 96
+#define BANK_SIZE 32
+static  char front_module_otp[FRONT_MODULE_OTP_SIZE];
+void ov8856_otp_read(void);
+//ASUS_BSP --- PJ "implement frontCam OTP"
 /* Logging macro */
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
@@ -29,6 +50,64 @@ static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev);
 
 /* Static declaration */
 static struct msm_sensor_ctrl_t *g_sctrl[MAX_CAMERAS];
+//ASUS_BSP Stimber_Hsueh
+unsigned char g_camera_status[4] = {1, 1, 1,1};
+unsigned char g_vga_status[2] = {1, 1};
+int g_camera_id = MAX_CAMERAS;
+static unsigned char g_camera_status_created = 0;
+static unsigned char g_front_camera_status_created = 0;
+int g_rear_camera_ref_cnt = -1;
+int g_front_camera_ref_cnt = -1;
+static void create_rear_status_proc_file(void);
+static void create_front_status_proc_file(void);
+static void remove_proc_file(void);
+static void create_rear_rw_proc(void);
+//ASUS_BSP Stimber_Hsueh 
+
+static void create_front_rw_proc(void); //ASUS_BSP PJ_Ma +++
+
+
+//ASUS_BSP Stimber_Hsueh +++
+static unsigned char g_rear_resolution_created = 0;
+char *g_rear_resolution = "";
+static void create_rear_resolution_proc_file(void);
+
+static unsigned char g_front_resolution_created = 0;
+char *g_front_resolution = "";
+static void create_front_resolution_proc_file(void);
+
+static unsigned char g_rear_module_created = 0;
+char *g_rear_module = "";
+static void create_rear_module_proc_file(void);
+
+static unsigned char g_front_module_created = 0;
+char *g_front_module = "";
+static void create_front_module_proc_file(void);
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP Stimber_Hsueh +++
+static unsigned char g_rear_otp_created = 0;
+static unsigned char g_front_otp_created = 0;
+static void create_rear_otp_proc_file(void);
+//ASUS_BSP Stimber_Hsueh ---
+static void create_front_otp_proc_file(void);
+
+static void imx298_otp_read(void); 
+
+static int g_reg, g_value;
+#define DBG_TXT_BUF_SIZE 256
+static char debugTxtBuf[DBG_TXT_BUF_SIZE];
+static unsigned char g_rear_rw_created = 0;
+
+static unsigned char g_front_rw_created = 0; //ASUS_BSP PJ_Ma +++
+
+//ASUS_BSP Stimber_Hsueh +++
+static unsigned char g_rear_temp_created = 0;
+static void create_rear_temp_proc_file(void);
+extern int isBackCamPowerup;
+//ASUS_BSP Stimber_Hsueh ---
+
+static int Sysfs_read_byte_seq(char *filename, int *value, int size); /*ASUS_BSP bill_chen "Implement ois"*/
 
 static int msm_sensor_platform_remove(struct platform_device *pdev)
 {
@@ -47,6 +126,7 @@ static int msm_sensor_platform_remove(struct platform_device *pdev)
 	kfree(s_ctrl->sensor_i2c_client);
 	kfree(s_ctrl);
 	g_sctrl[pdev->id] = NULL;
+	remove_proc_file();	//ASUS_BSP Stimber_Hsueh 
 
 	return 0;
 }
@@ -306,6 +386,7 @@ static int32_t msm_sensor_fill_ois_subdevid_by_name(
 	int32_t *ois_subdev_id;
 	struct  msm_sensor_info_t *sensor_info;
 	struct device_node *of_node = s_ctrl->of_node;
+	int32_t ois_probe_status = 1;  /*ASUS_BSP bill_chen "Implement ois"*/
 
 	if (!s_ctrl->sensordata->ois_name || !of_node)
 		return -EINVAL;
@@ -316,13 +397,14 @@ static int32_t msm_sensor_fill_ois_subdevid_by_name(
 
 	sensor_info = s_ctrl->sensordata->sensor_info;
 	ois_subdev_id = &sensor_info->subdev_id[SUB_MODULE_OIS];
+	Sysfs_read_byte_seq("/proc/driver/ois_status", &ois_probe_status, 1); /*ASUS_BSP bill_chen "Implement ois"*/
 	/*
 	 * string for ois name is valid, set sudev id to -1
 	 * and try to found new id
 	 */
 	*ois_subdev_id = -1;
 
-	if (0 == ois_name_len)
+	if (0 == ois_name_len || ois_probe_status == 0)  /*ASUS_BSP bill_chen "Implement ois"*/
 		return 0;
 
 	src_node = of_parse_phandle(of_node, "qcom,ois-src", 0);
@@ -802,6 +884,24 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_init_params.sensor_mount_angle);
 	CDBG("bypass video node creation %d",
 		slave_info->bypass_video_node_creation);
+
+//ASUS_BSP Stimber_Hsueh 
+	if(CAMERA_0 == slave_info->camera_id){
+		g_camera_id = CAMERA_0;
+		create_rear_status_proc_file();
+		create_rear_resolution_proc_file();
+		create_rear_module_proc_file();
+
+		create_rear_rw_proc();
+	}else if(CAMERA_2 == slave_info->camera_id){
+		g_camera_id = CAMERA_1;
+		create_front_status_proc_file();
+		create_front_resolution_proc_file();
+		create_front_module_proc_file();
+
+		create_front_rw_proc(); //ASUS_BSP PJ_Ma +++
+	}
+
 	/* Validate camera id */
 	if (slave_info->camera_id >= MAX_CAMERAS) {
 		pr_err("failed: invalid camera id %d max %d",
@@ -962,11 +1062,34 @@ CSID_TG:
 	/* Power up and probe sensor */
 	rc = s_ctrl->func_tbl->sensor_power_up(s_ctrl);
 	if (rc < 0) {
+		//ASUS_BSP Stimber_Hsueh
+		if(CAMERA_0 == slave_info->camera_id){
+			g_camera_status[g_rear_camera_ref_cnt] = 0;
+		}else if(CAMERA_2 == slave_info->camera_id){
+			g_vga_status[g_front_camera_ref_cnt] = 0;
+		}
 		pr_err("%s power up failed", slave_info->sensor_name);
 		goto free_camera_info;
 	}
 
 	pr_err("%s probe succeeded", slave_info->sensor_name);
+
+	//ASUS_BSP Stimber_Hsueh +++
+	if(strcmp(slave_info->sensor_name, "imx298") == 0){
+		g_rear_resolution = "16M";
+		g_rear_module = "IMX298";
+
+		imx298_otp_read();
+
+		create_rear_otp_proc_file();
+		create_rear_temp_proc_file();
+	}else if(strcmp(slave_info->sensor_name, "ov8856") == 0){
+		g_front_resolution = "8M";
+		g_front_module = "OV8856";
+		ov8856_otp_read();
+		create_front_otp_proc_file();
+	}
+	//ASUS_BSP Stimber_Hsueh ---
 
 	s_ctrl->bypass_video_node_creation =
 		slave_info->bypass_video_node_creation;
@@ -1393,6 +1516,814 @@ static void __exit msm_sensor_driver_exit(void)
 	i2c_del_driver(&msm_sensor_driver_i2c);
 	return;
 }
+//ASUS_BSP Stimber_Hsueh 
+#define	STATUS_REAR_PROC_FILE	"driver/camera_status"
+#define	STATUS_FRONT_PROC_FILE	"driver/vga_status"
+
+#define	RESOLUTION_REAR_PROC_FILE	"driver/GetRearCameraResolution"
+#define	RESOLUTION_FRONT_PROC_FILE	"driver/GetFrontCameraResolution"
+
+
+#define	MODULE_REAR_PROC_FILE	"driver/RearModule"
+#define	MODULE_FRONT_PROC_FILE	"driver/FrontModule"
+
+
+static struct proc_dir_entry *status_proc_file;
+
+static int rear_status_proc_read(struct seq_file *buf, void *v)
+{
+	unsigned char status = 0;
+	int i=0;
+	for(i=0; i<=g_rear_camera_ref_cnt; i++){
+		pr_info("Stimber proc read=%d\n",g_camera_status[i]);
+		status |= g_camera_status[i];
+	}
+	
+   	seq_printf(buf, "%d\n", status);				
+    return 0;
+}
+
+static int front_status_proc_read(struct seq_file *buf, void *v)
+{
+	unsigned char status = 0;
+	int i=0;
+	for(i=0; i<=g_front_camera_ref_cnt; i++){
+		pr_info("Stimber front proc read=%d\n",g_vga_status[i]);
+		status |= g_vga_status[i];
+	}
+
+	seq_printf(buf, "%d\n", status);
+    return 0;
+}
+
+static int rear_status_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, rear_status_proc_read, NULL);
+}
+
+static int front_status_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, front_status_proc_read, NULL);
+}
+
+static const struct file_operations rear_status_fops = {
+	.owner = THIS_MODULE,
+	.open = rear_status_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static const struct file_operations front_status_fops = {
+	.owner = THIS_MODULE,
+	.open = front_status_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_rear_status_proc_file(void)
+{
+    if(!g_camera_status_created) {   
+        status_proc_file = proc_create(STATUS_REAR_PROC_FILE, 0666, NULL, &rear_status_fops);
+		if(status_proc_file) {
+			CDBG("%s sucessed!\n", __func__);
+			g_camera_status_created = 1;
+	    } else {
+			pr_err("%s failed!\n", __func__);
+			g_camera_status_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+	g_rear_camera_ref_cnt++;
+}
+
+static void create_front_status_proc_file(void)
+{
+	if(!g_front_camera_status_created) {
+		status_proc_file = proc_create(STATUS_FRONT_PROC_FILE, 0666, NULL, &front_status_fops);
+	
+		if(status_proc_file) {
+			CDBG("%s sucessed!\n", __func__);
+			g_front_camera_status_created = 1;
+	    } else {
+			pr_err("%s failed!\n", __func__);
+			g_front_camera_status_created = 0;
+	    }
+	} else {
+        pr_info("%s: File Exist!\n", __func__);
+    }
+	g_front_camera_ref_cnt++;
+}
+
+static void remove_proc_file(void)
+{
+    extern struct proc_dir_entry proc_root;
+    pr_info("remove_proc_file\n");	
+    remove_proc_entry(STATUS_REAR_PROC_FILE, &proc_root);
+	remove_proc_entry(STATUS_FRONT_PROC_FILE, &proc_root);
+	remove_proc_entry(RESOLUTION_REAR_PROC_FILE, &proc_root);
+	remove_proc_entry(RESOLUTION_FRONT_PROC_FILE, &proc_root);
+	remove_proc_entry(MODULE_REAR_PROC_FILE, &proc_root);
+	remove_proc_entry(MODULE_FRONT_PROC_FILE, &proc_root);
+	
+	memset(g_camera_status, 0, sizeof(g_camera_status));
+	g_rear_camera_ref_cnt = -1;
+	g_front_camera_ref_cnt = -1;
+	g_camera_status_created = 0;
+	g_front_camera_status_created = 0;
+
+	g_rear_resolution_created = 0;
+	g_front_resolution_created = 0;
+	g_rear_module_created = 0;
+	g_front_module_created = 0;
+}
+//ASUS_BSP Stimber_Hsueh 
+
+//ASUS_BSP Stimber_Hsueh +++
+static int rear_resolution_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", g_rear_resolution);
+				
+    return 0;
+}
+
+static int rear_resolution_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, rear_resolution_proc_read, NULL);
+}
+
+static const struct file_operations rear_resolution_fops = {
+	.owner = THIS_MODULE,
+	.open = rear_resolution_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_rear_resolution_proc_file(void)
+{	
+	if(!g_rear_resolution_created) {   
+        status_proc_file = proc_create(RESOLUTION_REAR_PROC_FILE, 0666, NULL, &rear_resolution_fops);
+		if(status_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_rear_resolution_created = 1;
+	    } else {
+			pr_err("Stimber: %s failed!\n", __func__);
+			g_rear_resolution_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP Stimber_Hsueh +++
+static int front_resolution_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", g_front_resolution);
+				
+    return 0;
+}
+
+static int front_resolution_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, front_resolution_proc_read, NULL);
+}
+
+static const struct file_operations front_resolution_fops = {
+	.owner = THIS_MODULE,
+	.open = front_resolution_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_front_resolution_proc_file(void)
+{	
+	if(!g_front_resolution_created) {   
+        status_proc_file = proc_create(RESOLUTION_FRONT_PROC_FILE, 0666, NULL, &front_resolution_fops);
+		if(status_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_front_resolution_created = 1;
+	    } else {
+			pr_err("Stimber: %s failed!\n", __func__);
+			g_front_resolution_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+
+//ASUS_BSP Stimber_Hsueh +++
+static int rear_module_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", g_rear_module);
+				
+    return 0;
+}
+
+static int rear_module_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, rear_module_proc_read, NULL);
+}
+
+static const struct file_operations rear_module_fops = {
+	.owner = THIS_MODULE,
+	.open = rear_module_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_rear_module_proc_file(void)
+{	
+	if(!g_rear_module_created) {   
+        status_proc_file = proc_create(MODULE_REAR_PROC_FILE, 0666, NULL, &rear_module_fops);
+		if(status_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_rear_module_created = 1;
+	    } else {
+			pr_err("Stimber:%s failed!\n", __func__);
+			g_rear_module_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+}
+
+static int front_module_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", g_front_module);
+				
+    return 0;
+}
+
+static int front_module_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, front_module_proc_read, NULL);
+}
+
+static const struct file_operations front_module_fops = {
+	.owner = THIS_MODULE,
+	.open = front_module_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_front_module_proc_file(void)
+{	
+	if(!g_front_module_created) {   
+        status_proc_file = proc_create(MODULE_FRONT_PROC_FILE, 0666, NULL, &front_module_fops);
+		if(status_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_front_module_created = 1;
+	    } else {
+			pr_err("Stimber: %s failed!\n", __func__);
+			g_front_module_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP Stimber_Hsueh +++
+int sensor_read_reg(struct msm_sensor_ctrl_t  *s_ctrl, u16 addr, u16 *val)
+{
+	int err;
+      
+	err = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client,addr,val,MSM_CAMERA_I2C_BYTE_DATA);
+	CDBG("sensor_read_reg 0x%x\n",*val);
+	if(err <0)
+		return -EINVAL;	
+	else return 0;
+}
+
+int sensor_write_reg(struct msm_sensor_ctrl_t  *s_ctrl, u16 addr, u16 val)
+{
+	int err;
+	int retry = 0;
+	do {
+		err =s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client,addr,val,MSM_CAMERA_I2C_BYTE_DATA);		
+
+		if (err == 0)
+			return 0;
+		retry++;
+		pr_err("Stimber : i2c transfer failed, retrying %x %x\n",
+		       addr, val);
+		msleep(1); 
+	} while (retry <= SENSOR_MAX_RETRIES);
+
+	if(err == 0) {
+		pr_err("%s(%d): i2c_transfer error, but return 0!?\n", __FUNCTION__, __LINE__);
+		err = 0xAAAA;
+	}
+
+	return err;
+}
+
+//ASUS_BSP Stimber_Hsueh +++
+static int BackCam_RW_read(struct seq_file *buf, void *v)
+{
+	seq_printf(buf, "0x%x=0x%x\n",g_reg,g_value);
+	return 0;
+}
+
+static int BackCam_RW_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, BackCam_RW_read, NULL);
+}
+
+static ssize_t BackCam_RW_write(struct file *dev, const char *buf, size_t count, loff_t *ppos)
+{
+	int reg = -1,value = -1;
+	int rc, len;
+	struct msm_sensor_ctrl_t  *s_ctrl = g_sctrl[CAMERA_0];
+
+	len=(count > DBG_TXT_BUF_SIZE-1)?(DBG_TXT_BUF_SIZE-1):(count);
+	if (copy_from_user(debugTxtBuf,buf,len))
+			return -EFAULT;
+	debugTxtBuf[len]=0; //add string end
+	sscanf(debugTxtBuf, "%x %x", &reg, &value);
+	*ppos=len;
+	if (reg != -1 && value != -1) {
+		pr_info("BackCam write reg=0x%x value=0x%x\n", reg, value);
+		rc = sensor_write_reg(s_ctrl, reg, value);
+		if (rc < 0) {
+			pr_err("%s: failed to write 0x%x = 0x%x\n",
+				 __func__, reg, value);
+			return rc;
+		}
+	} else if (reg != -1) {
+		rc = sensor_read_reg(s_ctrl, reg, (u16 *)&value);
+		pr_info("BackCam read reg=0x%x value=0x%x\n", reg, value);
+		if (rc < 0) {
+			pr_err("%s: failed to read 0x%x\n",
+				 __func__, reg);
+			return rc;
+		}
+	}
+	g_reg = reg;
+	g_value = value & 0xff;
+
+	return len;
+}
+
+
+static const struct file_operations BackCam_RW_proc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= BackCam_RW_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+	.write		= BackCam_RW_write,
+};
+
+#define	REAR_RW_PROC_FILE	"driver/BackCam_RW"
+static struct proc_dir_entry *rw_rear_proc_file;
+
+static void create_rear_rw_proc(void){
+	
+	if(!g_rear_rw_created) {
+	    rw_rear_proc_file = proc_create(REAR_RW_PROC_FILE, 0666, NULL, &BackCam_RW_proc_fops);
+	    if (rw_rear_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_rear_rw_created = 1;
+	    } else {
+			printk("Stimber: %s failed!\n", __func__);
+			g_rear_rw_created = 0;
+	    }
+	} else {  
+        pr_info("File Exist!\n");  
+    }
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP PJ_Ma +++
+static int FrontCam_RW_read(struct seq_file *buf, void *v)
+{
+	seq_printf(buf, "0x%x=0x%x\n",g_reg,g_value);
+	return 0;
+}
+
+static int FrontCam_RW_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, FrontCam_RW_read, NULL);
+}
+
+static ssize_t FrontCam_RW_write(struct file *dev, const char *buf, size_t count, loff_t *ppos)
+{
+	int reg = -1,value = -1;
+	int rc, len;
+	struct msm_sensor_ctrl_t  *s_ctrl = g_sctrl[CAMERA_2];
+
+	len=(count > DBG_TXT_BUF_SIZE-1)?(DBG_TXT_BUF_SIZE-1):(count);
+	if (copy_from_user(debugTxtBuf,buf,len))
+			return -EFAULT;
+	debugTxtBuf[len]=0; //add string end
+	sscanf(debugTxtBuf, "%x %x", &reg, &value);
+	*ppos=len;
+	if (reg != -1 && value != -1) {
+		pr_info("FrontCam write reg=0x%x value=0x%x\n", reg, value);
+		rc = sensor_write_reg(s_ctrl, reg, value);
+		if (rc < 0) {
+			pr_err("%s: failed to write 0x%x = 0x%x\n",
+				 __func__, reg, value);
+			return rc;
+		}
+	} else if (reg != -1) {
+		rc = sensor_read_reg(s_ctrl, reg, (u16 *)&value);
+		pr_info("FrontCam read reg=0x%x value=0x%x\n", reg, value);
+		if (rc < 0) {
+			pr_err("%s: failed to read 0x%x\n",
+				 __func__, reg);
+			return rc;
+		}
+	}
+	g_reg = reg;
+	g_value = value & 0xff;
+
+	return len;
+}
+
+
+static const struct file_operations FrontCam_RW_proc_fops = {
+	.owner		= THIS_MODULE,
+	.open		= FrontCam_RW_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+	.write		= FrontCam_RW_write,
+};
+
+#define	FRONT_RW_PROC_FILE	"driver/FrontCam_RW"
+static struct proc_dir_entry *rw_front_proc_file;
+
+static void create_front_rw_proc(void){
+	
+	if(!g_front_rw_created) {
+	    rw_front_proc_file = proc_create(FRONT_RW_PROC_FILE, 0666, NULL, &FrontCam_RW_proc_fops);
+	    if (rw_front_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_front_rw_created = 1;
+	    } else {
+			printk("Stimber: %s failed!\n", __func__);
+			g_front_rw_created = 0;
+	    }
+	} else {  
+        pr_info("File Exist!\n");  
+    }
+}
+//ASUS_BSP PJ_Ma ---
+
+//ASUS_BSP Stimber_Hsueh +++
+static int __imx298_otp_read(void){
+
+	int i, ret = 0, j;
+	u16 read_value[MODULE_OTP_BULK_SIZE];
+	struct msm_sensor_ctrl_t  *s_ctrl = g_sctrl[CAMERA_0];
+	uint16_t save_sid = 0;
+
+	save_sid = s_ctrl->sensor_i2c_client->cci_client->sid;
+	s_ctrl->sensor_i2c_client->cci_client->sid = 0x50; //EEPROM
+				
+	memset(read_value, 0, sizeof(read_value));
+
+	for (i = 0; i < MODULE_OTP_BULK_SIZE; i++) {
+		for (j = 0; j < 3; j++) {
+			ret = sensor_read_reg(s_ctrl, 0x0+i, &read_value[i]);
+			if (ret<0) {
+				pr_err("%s: i2c failed \n",
+					 __func__);
+			} else {
+				break;
+			}
+		}
+	}
+
+	s_ctrl->sensor_i2c_client->cci_client->sid = save_sid;
+	
+	snprintf(rear_module_otp, sizeof(rear_module_otp)
+		, "0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n"
+			, read_value[0]&0xFF, read_value[1]&0xFF, read_value[2]&0xFF, read_value[3]&0xFF, read_value[4]&0xFF
+			, read_value[5]&0xFF, read_value[6]&0xFF, read_value[7]&0xFF, read_value[8]&0xFF, read_value[9]&0xFF
+			, read_value[10]&0xFF, read_value[11]&0xFF, read_value[12]&0xFF, read_value[13]&0xFF, read_value[14]&0xFF
+			, read_value[15]&0xFF, read_value[16]&0xFF, read_value[17]&0xFF, read_value[18]&0xFF, read_value[19]&0xFF
+			, read_value[20]&0xFF, read_value[21]&0xFF, read_value[22]&0xFF, read_value[23]&0xFF
+			, read_value[24]&0xFF, read_value[25]&0xFF, read_value[26]&0xFF, read_value[27]&0xFF, read_value[28]&0xFF
+			, read_value[29]&0xFF, read_value[30]&0xFF, read_value[31]&0xFF);
+
+	pr_debug("Stimber: %s OTP value: %s\n", __func__, rear_module_otp);
+
+	return 0;
+}
+
+static void imx298_otp_read(void)
+{
+	int ret=0;
+
+	ret = __imx298_otp_read();
+	
+	if (ret) {
+		pr_err("%s: sensor found no valid OTP data\n",
+			  __func__);
+	}
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+#define	REAR_OTP_PROC_FILE	"driver/rear_otp"
+static struct proc_dir_entry *otp_proc_file;
+
+static int rear_otp_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", rear_module_otp);
+    pr_err("%s: rear_module_otp = %s", __func__, rear_module_otp);
+    return 0;
+}
+
+static int rear_otp_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, rear_otp_proc_read, NULL);
+}
+
+static const struct file_operations rear_otp_fops = {
+	.owner = THIS_MODULE,
+	.open = rear_otp_proc_open,
+	.read = seq_read,
+	//.write = otp_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_rear_otp_proc_file(void)
+{
+	if(!g_rear_otp_created) {
+	    otp_proc_file = proc_create(REAR_OTP_PROC_FILE, 0666, NULL, &rear_otp_fops);
+	    if (otp_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_rear_otp_created = 1;
+	    } else {
+			printk("Stimber: %s failed!\n", __func__);
+			g_rear_otp_created = 0;
+	    }
+	} else {  
+        pr_info("File Exist!\n");  
+    }
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+//ASUS_BSP +++ PJ "implement frontCam OTP"
+static struct msm_camera_i2c_reg_array otp_reg_array[] = {
+		{0x3D84, 0xC0},
+		{0x3D88, 0x70},
+		{0x3D89, 0x00},
+		{0x3D8A, 0x70},
+		{0x3D8B, 0x6F},
+		{0x3D85, 0x06},
+		{0x0100, 0x01},
+		{0x3D81, 0x01},
+};
+
+static  struct msm_camera_i2c_reg_setting otp_settings = {
+  .reg_setting = otp_reg_array,
+  .size = ARRAY_SIZE(otp_reg_array),
+  .addr_type = MSM_CAMERA_I2C_WORD_ADDR,
+  .data_type = MSM_CAMERA_I2C_BYTE_DATA,
+  .delay = 20,
+};
+
+int __ov8856_otp_read(void)
+{
+ 	int   i, j, package_num;
+ 	int32_t rc = 0;
+	u16 bank_value[MODULE_OTP_SIZE], temp;
+	struct msm_sensor_ctrl_t  *s_ctrl = g_sctrl[CAMERA_2];
+
+	package_num = 3;
+
+	//set 0x0103 to 1, make sure reset sensor as default
+	 rc = sensor_write_reg(s_ctrl, 0x0103, 0x01);
+	if (rc) {
+		pr_err("%s: set 0x0103 to 0x01\n", __func__);
+		return rc;
+	}
+
+	//set 0x5001[3] to 0
+	sensor_read_reg(s_ctrl, 0x5001, &temp);
+	rc = sensor_write_reg(s_ctrl, 0x5001, (0x00&0x08)|(temp&(~0x08)));
+	if (rc) {
+		pr_err("%s: set 0x5001[3] to 0\n", __func__);
+		return rc;
+	}
+
+	//read OTP into buffer
+	rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write_table(s_ctrl->sensor_i2c_client, &otp_settings);
+	 if (rc < 0) {
+		 pr_err("%s : read OTP into buffer failed\n", __func__);
+	 }
+
+	for(j = 0; j < package_num; j++) {
+		for (i = 0; i < BANK_SIZE; i++) {
+			sensor_read_reg(s_ctrl, 0x7010+i+j*BANK_SIZE, &bank_value[i+j*BANK_SIZE]);
+		}
+	}
+
+	snprintf(front_module_otp, sizeof(front_module_otp)
+		, "0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n"
+			, bank_value[0]&0xFF, bank_value[1]&0xFF, bank_value[2]&0xFF, bank_value[3]&0xFF, bank_value[4]&0xFF
+			, bank_value[5]&0xFF, bank_value[6]&0xFF, bank_value[7]&0xFF, bank_value[8]&0xFF, bank_value[9]&0xFF
+			, bank_value[10]&0xFF, bank_value[11]&0xFF, bank_value[12]&0xFF, bank_value[13]&0xFF, bank_value[14]&0xFF
+			, bank_value[15]&0xFF, bank_value[16]&0xFF, bank_value[17]&0xFF, bank_value[18]&0xFF, bank_value[19]&0xFF
+			, bank_value[20]&0xFF, bank_value[21]&0xFF, bank_value[22]&0xFF, bank_value[23]&0xFF
+			, bank_value[24]&0xFF, bank_value[25]&0xFF, bank_value[26]&0xFF, bank_value[27]&0xFF, bank_value[28]&0xFF
+			, bank_value[29]&0xFF, bank_value[30]&0xFF, bank_value[31]&0xFF, bank_value[32]&0xFF, bank_value[33]&0xFF
+			, bank_value[34]&0xFF, bank_value[35]&0xFF, bank_value[36]&0xFF, bank_value[37]&0xFF, bank_value[38]&0xFF
+			, bank_value[39]&0xFF, bank_value[40]&0xFF, bank_value[41]&0xFF, bank_value[42]&0xFF, bank_value[43]&0xFF
+			, bank_value[44]&0xFF, bank_value[45]&0xFF, bank_value[46]&0xFF, bank_value[47]&0xFF
+			, bank_value[48]&0xFF, bank_value[49]&0xFF, bank_value[50]&0xFF, bank_value[51]&0xFF, bank_value[52]&0xFF
+			, bank_value[53]&0xFF, bank_value[54]&0xFF, bank_value[55]&0xFF, bank_value[56]&0xFF, bank_value[57]&0xFF
+			, bank_value[58]&0xFF, bank_value[59]&0xFF, bank_value[60]&0xFF, bank_value[61]&0xFF, bank_value[62]&0xFF
+			, bank_value[63]&0xFF, bank_value[64]&0xFF, bank_value[65]&0xFF, bank_value[66]&0xFF, bank_value[67]&0xFF
+			, bank_value[68]&0xFF, bank_value[69]&0xFF, bank_value[70]&0xFF, bank_value[71]&0xFF
+			, bank_value[72]&0xFF, bank_value[73]&0xFF, bank_value[74]&0xFF, bank_value[75]&0xFF, bank_value[76]&0xFF
+			, bank_value[77]&0xFF, bank_value[78]&0xFF, bank_value[79]&0xFF, bank_value[80]&0xFF, bank_value[81]&0xFF
+			, bank_value[82]&0xFF, bank_value[83]&0xFF, bank_value[84]&0xFF, bank_value[85]&0xFF, bank_value[86]&0xFF
+			, bank_value[87]&0xFF, bank_value[88]&0xFF, bank_value[89]&0xFF, bank_value[90]&0xFF, bank_value[91]&0xFF
+			, bank_value[92]&0xFF, bank_value[93]&0xFF, bank_value[94]&0xFF, bank_value[95]&0xFF);
+
+	//clear OTP buffer
+	for (i = 0x7000; i <= 0x706F; i++) {
+		rc = sensor_write_reg(s_ctrl, i, 0);
+		if (rc) {
+			pr_err("%s: failed to write 0x%x = 0x%x\n",
+				 __func__, i, 0);
+			return rc;
+		}
+	}
+
+	//set 0x5001[3] to 1
+	sensor_read_reg(s_ctrl, 0x5001, &temp);
+	rc = sensor_write_reg(s_ctrl, 0x5001, (0x08&0x08)|(temp&(~0x08)));
+	if (rc) {
+		pr_err("%s: set 0x5001[3] to 1\n", __func__);
+		return rc;
+	}
+	pr_debug("PJ: %s OTP value: %s\n", __func__, front_module_otp);
+
+	return 0;
+}
+
+void ov8856_otp_read(void)
+{
+	int ret;
+
+	ret = __ov8856_otp_read();
+	if (ret) {
+		pr_err("%s: sensor found no valid OTP data\n",
+			  __func__);
+	}
+}
+
+#define	FRONT_OTP_PROC_FILE	"driver/front_otp"
+static struct proc_dir_entry *otp_front_proc_file;
+
+static int front_otp_proc_read(struct seq_file *buf, void *v)
+{
+    seq_printf(buf, "%s\n", front_module_otp);
+    return 0;
+}
+
+static int front_otp_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, front_otp_proc_read, NULL);
+}
+
+static const struct file_operations front_otp_fops = {
+	.owner = THIS_MODULE,
+	.open = front_otp_proc_open,
+	.read = seq_read,
+	//.write = otp_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_front_otp_proc_file(void)
+{
+	if(!g_front_otp_created) {
+	    otp_front_proc_file = proc_create(FRONT_OTP_PROC_FILE, 0666, NULL, &front_otp_fops);
+	    if (otp_front_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_front_otp_created = 1;
+	    } else {
+			printk("Stimber: %s failed!\n", __func__);
+			g_front_otp_created = 0;
+	    }
+	} else {  
+        pr_info("File Exist!\n");  
+    }
+}
+//ASUS_BSP --- PJ "implement frontCam OTP"
+
+//ASUS_BSP Stimber_Hsueh +++
+#define	TEMP_REAR_PROC_FILE	"driver/camera_temp"
+
+static int rear_temp_proc_read(struct seq_file *buf, void *v)
+{
+	uint16_t temp = 0;
+	sensor_read_temp(&temp);
+	seq_printf(buf, "%d\n", temp*1000);
+	pr_err("Temperature = %d\n", temp);
+
+    return 0;
+}
+
+static int rear_temp_proc_open(struct inode *inode, struct  file *file)
+{
+    return single_open(file, rear_temp_proc_read, NULL);
+}
+
+static const struct file_operations rear_temp_fops = {
+	.owner = THIS_MODULE,
+	.open = rear_temp_proc_open,
+	.read = seq_read,
+	//.write = status_proc_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static void create_rear_temp_proc_file(void)
+{	
+	if(!g_rear_temp_created) {   
+        status_proc_file = proc_create(TEMP_REAR_PROC_FILE, 0666, NULL, &rear_temp_fops);
+		if(status_proc_file) {
+			CDBG("Stimber: %s sucessed!\n", __func__);
+			g_rear_temp_created = 1;
+	    } else {
+			pr_err("Stimber:%s failed!\n", __func__);
+			g_rear_temp_created = 0;
+	    }  
+    } else {  
+        pr_info("File Exist!\n");  
+    }  
+}
+//ASUS_BSP Stimber_Hsueh ---
+
+/*ASUS_BSP +++ bill_chen "Implement ois"*/
+static int Sysfs_read_byte_seq(char *filename, int *value, int size)
+{
+	int i = 0;
+	struct file *fp = NULL;
+	mm_segment_t old_fs;
+	loff_t pos_lsts = 0;
+	char buf[3];
+	ssize_t read_size = 0;
+
+	/* open file */
+	fp = filp_open(filename, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+	if (IS_ERR_OR_NULL(fp)) {
+		return -ENOENT;	/*No such file or directory*/
+	}
+
+	/*For purpose that can use read/write system call*/
+
+	/* Save addr_limit of the current process */
+	old_fs = get_fs();
+	/* Set addr_limit of the current process to that of kernel */
+	set_fs(KERNEL_DS);
+
+	if (fp->f_op != NULL && fp->f_op->read != NULL) {
+		pos_lsts = 0;
+		for(i = 0; i < size; i++){
+			read_size = fp->f_op->read(fp, buf, 3, &pos_lsts);
+			buf[2]='\0';
+			if(read_size == 0) {
+				break;
+			}
+			sscanf(buf, "%x", &value[i]);
+		}
+	} else {
+		return -ENXIO;	/*No such device or address*/
+	}
+	/* Set addr_limit of the current process back to its own */
+	set_fs(old_fs);
+
+	/* close file */
+	filp_close(fp, NULL);
+
+	return i;
+}
+/*ASUS_BSP --- bill_chen "Implement ois"*/
 
 module_init(msm_sensor_driver_init);
 module_exit(msm_sensor_driver_exit);

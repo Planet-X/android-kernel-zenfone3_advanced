@@ -201,6 +201,7 @@
 			regulator-max-microvolt = <2900000>;
 			qcom,init-voltage = <2900000>;
 			status = "okay";
+			regulator-always-on;
 		};
 	};
 
@@ -217,9 +218,10 @@
 	rpm-regulator-ldoa10 {
 		status = "okay";
 		pm8953_l10: regulator-l10 {
-			regulator-min-microvolt = <2850000>;
-			regulator-max-microvolt = <2850000>;
-			qcom,init-voltage = <2850000>;
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			qcom,init-voltage = <3000000>;
+			regulator-always-on;	/* ASUS BSP Always Enable 1.8V for Touch, Laser & Sensor 3v VDD */
 			status = "okay";
 		};
 	};

@@ -86,6 +86,15 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
 
 static const char longname[] = "Gadget Android";
+extern void dpNotify(void);
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+static int diag_enable = 0;
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
+static int boot_lock = 0;
+
+extern int getMACConnect(void);
+extern int resetHostTypeChanged(void);
+extern int getHostTypeChanged(void);
 
 /* Default vendor and product IDs, overridden by userspace */
 #define VENDOR_ID		0x18D1
@@ -421,6 +430,7 @@ static void android_work(struct work_struct *data)
 	char *configured[2]   = { "USB_STATE=CONFIGURED", NULL };
 	char *suspended[2]   = { "USB_STATE=SUSPENDED", NULL };
 	char *resumed[2]   = { "USB_STATE=RESUMED", NULL };
+	char *host_changed[2]   = { "USB_STATE=HOSTCHANGED", NULL };
 	char **uevent_envp = NULL;
 	static enum android_device_state last_uevent, next_state;
 	unsigned long flags;
@@ -487,6 +497,11 @@ static void android_work(struct work_struct *data)
 			kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE,
 					   uevent_envp);
 			last_uevent = next_state;
+			if(getHostTypeChanged()){
+				kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE,
+						host_changed);
+				resetHostTypeChanged();
+			}
 		}
 		pr_info("%s: sent uevent %s\n", __func__, uevent_envp[0]);
 	} else {
@@ -530,10 +545,13 @@ static int android_enable(struct android_dev *dev)
 			msleep(MIN_DISCONNECT_DELAY_MS - ktime_to_ms(diff));
 
 		/* Userspace UVC driver will trigger connect for video */
-		if (!video_enabled)
+		if (!video_enabled) {
 			usb_gadget_connect(cdev->gadget);
-		else
+			dpNotify();
+			printk("%s: usb_gadget_connect called.\n",__func__);
+		} else {
 			pr_debug("defer gadget connect until usersapce opens video device\n");
+		}
 	}
 
 	return err;
@@ -3664,7 +3682,24 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 	}
 
 	strlcpy(buf, buff, sizeof(buf));
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+	if(diag_enable == 1){
+		strlcpy(buf, "diag,serial,rmnet,adb", sizeof("diag,serial,rmnet,adb"));
+	}else if(diag_enable == 2){
+		strlcpy(buf, "rndis,serial,diag,adb", sizeof("rndis,serial,diag,adb"));
+	}else{
+		strlcpy(buf, buff, sizeof(buf));
+	}
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
 	b = strim(buf);
+
+	if(getMACConnect()){
+		printk("[USB] Connect to MAC\n");
+	}else{
+		printk("[USB] Connect to Other\n");
+	}
+
+	printk("[USB] func:%s\n",buf);
 
 	while (b) {
 		conf_str = strsep(&b, ":");
@@ -3705,12 +3740,15 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 					ffs_enabled = 1;
 				continue;
 			}
+			if(getMACConnect()&&strcmp(name,"rndis")==0){
+					err = android_enable_function(dev, conf, "ecm");
+			} else {
+				if (!strcmp(name, "rndis") &&
+					!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
+					name = "rndis_qc";
 
-			if (!strcmp(name, "rndis") &&
-				!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
-				name = "rndis_qc";
-
-			err = android_enable_function(dev, conf, name);
+				err = android_enable_function(dev, conf, name);
+			}
 			if (err)
 				pr_err("android_usb: Cannot enable '%s' (%d)",
 							name, err);
@@ -3752,6 +3790,9 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 	if (!cdev)
 		return -ENODEV;
 
+	if(boot_lock)
+		return -EBUSY;
+
 	mutex_lock(&dev->mutex);
 
 	sscanf(buff, "%d", &enabled);
@@ -3772,11 +3813,24 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 		 * pull-up is enabled immediately. The enumeration is
 		 * reliable with 100 msec delay.
 		 */
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+		if(diag_enable == 1){
+			cdev->desc.idVendor = __constant_cpu_to_le16(0x05C6);
+			cdev->desc.idProduct = __constant_cpu_to_le16(0x9091);
+		}
+		if(diag_enable == 2){
+			cdev->desc.idVendor = __constant_cpu_to_le16(0x05C6);
+			cdev->desc.idProduct = __constant_cpu_to_le16(0x90B6);
+		}
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
 		list_for_each_entry(conf, &dev->configs, list_item)
 			list_for_each_entry(f_holder, &conf->enabled_functions,
 						enabled_list) {
 				if (f_holder->f->enable)
 					f_holder->f->enable(f_holder->f);
+				if(strncmp(f_holder->f->name,"ecm",3)==0){
+					cdev->desc.bDeviceClass = USB_CLASS_COMM;
+				}
 				if (!strncmp(f_holder->f->name,
 						"audio_source", 12))
 					audio_enabled = true;
@@ -3860,6 +3914,56 @@ out:
 	return snprintf(buf, PAGE_SIZE, "%s\n", state);
 }
 
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+static ssize_t diag_show(struct device *pdev, struct device_attribute *attr,
+			   char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", diag_enable);
+}
+static ssize_t diag_store(struct device *pdev, struct device_attribute *attr,
+			    const char *buff, size_t size)
+{
+	sscanf(buff, "%d", &diag_enable);
+	return size;
+}
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
+
+static ssize_t boot_lock_show(struct device *pdev, struct device_attribute *attr,
+			   char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", boot_lock);
+}
+static ssize_t boot_lock_store(struct device *pdev, struct device_attribute *attr,
+			    const char *buff, size_t size)
+{
+	sscanf(buff, "%d", &boot_lock);
+	if(!boot_lock)
+		printk("%s: boot unlock.\n",__func__);
+	return size;
+}
+
+//ASUS_BSP+++ "[USB][NA][OTHER] Add ASUS SSN Support"
+static ssize_t serial_show(struct device *pdev, struct device_attribute *attr,
+			   char *buf)
+{
+	printk("%s: %s\n", __func__, serial_string);
+	return snprintf(buf, PAGE_SIZE, "%s\n", serial_string);
+}
+static ssize_t serial_store(struct device *pdev, struct device_attribute *attr,
+			    const char *buff, size_t size)
+{
+	printk("%s: %s\n", __func__, buff);
+	//ensure SSN number in the ASCII range of "0" to "Z"
+	if(buff[0] >= 0x30 && buff[0] <= 0x5a)
+		sscanf(buff, "%s", serial_string);
+	else {
+		printk("%s: buff[0] check fail, use default value C4ATAS000000\n", __func__);
+		sscanf("C4ATAS000000", "%s", serial_string);
+	}
+	return size;
+}
+//ASUS_BSP--- "[USB][NA][OTHER] Add ASUS SSN Support"
+
 #define ANDROID_DEV_ATTR(field, format_string)				\
 static ssize_t								\
 field ## _show(struct device *pdev, struct device_attribute *attr,	\
@@ -3934,7 +4038,15 @@ DESCRIPTOR_ATTR(bDeviceSubClass, "%d\n")
 DESCRIPTOR_ATTR(bDeviceProtocol, "%d\n")
 DESCRIPTOR_STRING_ATTR(iManufacturer, manufacturer_string)
 DESCRIPTOR_STRING_ATTR(iProduct, product_string)
-DESCRIPTOR_STRING_ATTR(iSerial, serial_string)
+
+//ASUS_BSP+++ "[USB][NA][Spec] only allow other modify iSerial in Factory"
+//DESCRIPTOR_STRING_ATTR(iSerial, serial_string)
+#ifdef ASUS_FACTORY_BUILD
+static DEVICE_ATTR(iSerial, S_IRUGO | S_IWUGO, serial_show, serial_store);
+#else
+static DEVICE_ATTR(iSerial, S_IRUGO | S_IWUSR, serial_show, serial_store);
+#endif
+//ASUS_BSP--- "[USB][NA][Spec] only allow other modify iSerial in Factory"
 
 static DEVICE_ATTR(functions, S_IRUGO | S_IWUSR, functions_show,
 						 functions_store);
@@ -3952,6 +4064,12 @@ static DEVICE_ATTR(state, S_IRUGO, state_show, NULL);
 static DEVICE_ATTR(remote_wakeup, S_IRUGO | S_IWUSR,
 		remote_wakeup_show, remote_wakeup_store);
 
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+static DEVICE_ATTR(diag, S_IRUGO | S_IWUSR, diag_show, diag_store);
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
+
+static DEVICE_ATTR(boot_lock, S_IRUGO | S_IWUSR, boot_lock_show, boot_lock_store);
+
 static struct device_attribute *android_usb_attributes[] = {
 	&dev_attr_idVendor,
 	&dev_attr_idProduct,
@@ -3965,6 +4083,10 @@ static struct device_attribute *android_usb_attributes[] = {
 	&dev_attr_functions,
 	&dev_attr_enable,
 	&dev_attr_pm_qos,
+//ASUS_BSP+++ "[USB][NA][Spec] add QCOM USB Support in kernel"
+	&dev_attr_diag,
+//ASUS_BSP--- "[USB][NA][Spec] add QCOM USB Support in kernel"
+	&dev_attr_boot_lock,
 	&dev_attr_up_pm_qos_sample_sec,
 	&dev_attr_down_pm_qos_sample_sec,
 	&dev_attr_up_pm_qos_threshold,

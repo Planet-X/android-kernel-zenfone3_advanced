@@ -1081,7 +1081,10 @@ static void mdss_dsi_8996_phy_config(struct mdss_dsi_ctrl_pdata *ctrl)
 		}
 
 		/* test str */
-		MIPI_OUTP(base + 0x14, 0x0088);	/* fixed */
+		if (g_ASUS_hwID == ZE520KL_ER1 || g_ASUS_hwID == ZE520KL_ER2)
+			MIPI_OUTP(base + 0x14, 0x0022);	/* fixed */
+		else
+			MIPI_OUTP(base + 0x14, 0x0088);	/* fixed */
 
 		/* phy timing, 8 * 5 */
 		cnt = 8;

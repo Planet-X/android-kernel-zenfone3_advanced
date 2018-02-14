@@ -21,6 +21,9 @@
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
+int isBackCamPowerup=0; //ASUS_BSP PJ_Ma+++
+
+static struct msm_sensor_ctrl_t *g_main_ctrl=NULL;	//ASUS_BSP Stimber_Hsueh
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl;
 static struct msm_camera_i2c_fn_t msm_sensor_secure_func_tbl;
 
@@ -117,6 +120,7 @@ int msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 	struct msm_camera_power_ctrl_t *power_info;
 	enum msm_camera_device_type_t sensor_device_type;
 	struct msm_camera_i2c_client *sensor_i2c_client;
+	int rc = 0; //ASUS_BSP PJ_Ma+++
 
 	if (!s_ctrl) {
 		pr_err("%s:%d failed: s_ctrl %pK\n",
@@ -136,13 +140,18 @@ int msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 			__func__, __LINE__, power_info, sensor_i2c_client);
 		return -EINVAL;
 	}
+	//ASUS_BSP PJ_Ma+++
+	isBackCamPowerup=0;
+	rc = msm_camera_power_down(power_info, sensor_device_type,
+		sensor_i2c_client);
 
 	/* Power down secure session if it exist*/
 	if (s_ctrl->is_secure)
 		msm_camera_tz_i2c_power_down(sensor_i2c_client);
 
-	return msm_camera_power_down(power_info, sensor_device_type,
-		sensor_i2c_client);
+	pr_err("%s : rc=(%d) X\n", __func__, rc);
+	return rc;
+	//ASUS_BSP PJ_Ma---
 }
 
 int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
@@ -215,6 +224,13 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 		}
 	}
 
+	if(rc==0){
+		if(s_ctrl->id == 0){
+			g_main_ctrl = s_ctrl;
+			isBackCamPowerup=1;
+		}
+	}
+	pr_err("%s : rc=(%d) X\n", __func__, rc); //ASUS_BSP PJ_Ma+++
 	return rc;
 }
 
@@ -895,6 +911,12 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 		}
 		break;
 	}
+	//ASUS_BSP PJ_Ma+++
+	case CFG_SET_STOP_STREAM:
+			pr_err("%s : CFG_SET_STOP_STREAM\n", __func__);
+			usleep_range(48000, 49000);
+		break;
+	//ASUS_BSP PJ_Ma---
 
 	default:
 		rc = -EFAULT;
@@ -1377,6 +1399,12 @@ int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 		}
 		break;
 	}
+	//ASUS_BSP PJ_Ma+++
+	case CFG_SET_STOP_STREAM:
+			pr_err("%s : CFG_SET_STOP_STREAM\n", __func__);
+			usleep_range(48000, 49000);
+		break;
+	//ASUS_BSP PJ_Ma---
 
 	default:
 		rc = -EFAULT;
@@ -1559,4 +1587,53 @@ int32_t msm_sensor_init_default_params(struct msm_sensor_ctrl_t *s_ctrl)
 	s_ctrl->msm_sd.sd.entity.flags = mount_pos | MEDIA_ENT_FL_DEFAULT;
 
 	return 0;
+}
+#include <linux/time.h>
+
+//ASUS_BSP Stimber_Hsueh +++
+int sensor_read_temp(uint16_t *tmp)
+{
+	struct msm_camera_i2c_client *sensor_i2c_client;
+	int rc = 0;
+	static uint16_t temp=0;
+
+	struct timeval tv_now;
+	static struct timeval tv_prv;
+	unsigned long long val;
+
+	if(g_main_ctrl != NULL){
+		mutex_lock(g_main_ctrl->msm_sensor_mutex);
+		if(isBackCamPowerup==1){
+			sensor_i2c_client = g_main_ctrl->sensor_i2c_client;
+			if(sensor_i2c_client != NULL){
+				do_gettimeofday(&tv_now);
+				val = (tv_now.tv_sec*1000000000LL+tv_now.tv_usec*1000)-(tv_prv.tv_sec*1000000000LL+tv_prv.tv_usec*1000);
+
+				if(val/1000000000LL >= 5){
+					rc = sensor_i2c_client->i2c_func_tbl->i2c_read(
+						sensor_i2c_client, 0x013a, &temp, MSM_CAMERA_I2C_BYTE_DATA);
+					if (rc < 0) {
+						temp = 0;
+						pr_err("Stimber %s: read reg failed\n", __func__);
+						mutex_unlock(g_main_ctrl->msm_sensor_mutex);
+						return rc;
+					}
+					tv_prv.tv_sec = tv_now.tv_sec;
+					tv_prv.tv_usec = tv_now.tv_usec;
+				}else{
+					pr_err("temperature : cached (%d) val=%lld\n", temp, val);
+				}
+			}
+		}else{
+			pr_err("No temperature1!\n");
+			temp = 0;
+		}
+		mutex_unlock(g_main_ctrl->msm_sensor_mutex);
+	}else{
+		pr_err("No temperature2!\n");
+		temp = 0;
+	}
+	*tmp = temp;
+	
+	return rc;
 }

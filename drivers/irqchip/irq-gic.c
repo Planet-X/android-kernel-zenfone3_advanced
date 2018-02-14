@@ -51,6 +51,17 @@
 #include "irq-gic-common.h"
 #include "irqchip.h"
 
+
+/*ASUS_BSP Freddy_Ke:
+*
+* Use "gic_irq_cnt" to count resume irq number.
+* User "gic_resume_irq[8]" to save resume irq's HW number.
+*
+* This two variables are externed in console.h and printk.c will include console.h
+*
+* printk.c will use this 2 value to print IRQ trigger during "resume_console()"
+*/
+int gic_irq_cnt,gic_resume_irq[8];//[Power]Add these values to save IRQ's counts and number
 union gic_base {
 	void __iomem *common_base;
 	void __percpu * __iomem *percpu_base;
@@ -256,13 +267,96 @@ void gic_show_pending_irq(void)
 		}
 	}
 }
+//ASUS_BSP+++ "for wlan wakeup trace"
+extern int g_wcnss_wlanrx_irq;
+static int wcnss_irq_flag_rx = 0;
+static int wcnss_irq_flag_wdi = 0;
 
+int wcnss_irq_flag_function_rx(void)
+{
+    if( wcnss_irq_flag_rx == 1 ) {
+        wcnss_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(wcnss_irq_flag_function_rx);
+
+
+int wcnss_irq_flag_function_wdi(void){
+    if( wcnss_irq_flag_wdi == 1 ){
+        wcnss_irq_flag_wdi = 0;
+        wcnss_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(wcnss_irq_flag_function_wdi);
+
+//ASUS_BSP--- "for wlan wakeup trace"
+
+/*ASUS-BBSP Log Modem Wake Up Info+++*/
+#define MODEM_IRQ_VALUE 57
+static int modem_resume_irq_flag = 0;
+int modem_resume_irq_flag_function(void)
+{
+    if( modem_resume_irq_flag == 1 ) {
+        modem_resume_irq_flag = 0;
+        return 1;
+    }
+ 	return 0;
+}
+EXPORT_SYMBOL(modem_resume_irq_flag_function);
+/*ASUS-BBSP Log Modem Wake Up Info---*/
+
+
+//ASUS_BSP +++ Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 57 260
+static int rmnet_irq_flag_rx = 0;
+int rmnet_irq_flag_function_rx(void)
+{
+    if( rmnet_irq_flag_rx == 1 ) {
+        rmnet_irq_flag_rx = 0;
+        return 1;
+    }
+
+    return 0;
+}
+EXPORT_SYMBOL(rmnet_irq_flag_function_rx);
+
+static int rmnet_irq_flag_rx_260 = 0; 
+int rmnet_irq_flag_function_rx_260(void)
+{
+    if( rmnet_irq_flag_rx_260 == 1 ) {
+        rmnet_irq_flag_rx_260 = 0; 
+        return 1;
+    }    
+
+    return 0;
+}
+EXPORT_SYMBOL(rmnet_irq_flag_function_rx_260);
+//ASUS_BSP --- Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 57 260
+
+
+/*ASUS_BSP Freddy:
+* msm_show_resume_irq_mask manual debug node is "/sys/module/msm_show_resume_irq/parameters/debug_mask"
+* irq-gic-v3.c will include "irq-gic-common.h", which extern msm_show_resume_irq_mask.
+*
+* If "debug_mask" or "msm_show_resume_irq_mask" is True, gic_show_resume_irq will dump more info.
+*/
 static void gic_show_resume_irq(struct gic_chip_data *gic)
 {
 	unsigned int i;
 	u32 enabled;
 	u32 pending[32];
 	void __iomem *base = gic_data_dist_base(gic);
+	//[+++][Power]reset IRQ count and IRQ number every time.
+	int j;
+	for (j=0;j < 8; j++)
+		gic_resume_irq[j]=0;
+	gic_irq_cnt=0;
+	//[---][Power]reset IRQ count and IRQ number every time.
 
 	if (!msm_show_resume_irq_mask)
 		return;
@@ -288,10 +382,49 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 		else if (desc->action && desc->action->name)
 			name = desc->action->name;
 
-		pr_warning("%s: %d triggered %s\n", __func__,
+		printk("[PM]%s: %d triggered %s\n", __func__,
 					i + gic->irq_offset, name);
-		log_base_wakeup_reason(i + gic->irq_offset);
+//		log_base_wakeup_reason(i + gic->irq_offset);
+		//[+++][Power]save IRQ's counts and number
+		if (gic_irq_cnt < 8)
+			gic_resume_irq[gic_irq_cnt]=i + gic->irq_offset;
+		gic_irq_cnt++;
+		//[---][Power]save IRQ's counts and number
+
+		//ASUS_BSP+++ "for wlan wakeup trace"
+		if( (i + gic->irq_offset) == 178 ){
+			printk("%s: [wlan] wcnss gic(%d) triggered g_wcnss_wlanrx_irq(%d)\n", __func__,
+					i + gic->irq_offset, g_wcnss_wlanrx_irq);
+			printk("%s: [wlan] wcnss force g_wcnss_wlanrx_irq=178, wcnss_irq_flag_rx=1\n", __func__);
+		    wcnss_irq_flag_rx = 1;
+		    wcnss_irq_flag_wdi = 1;
+		}
+		//ASUS_BSP--- "for wlan wakeup trace"
+
+		/*ASUS-BBSP Log Modem Wake Up Info+++*/
+        if( (i + gic->irq_offset) == MODEM_IRQ_VALUE ) {
+	        modem_resume_irq_flag = 1;
+        }
+        /*ASUS-BBSP Log Modem Wake Up Info---*/
+        
+                //ASUS_BSP +++ Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 57
+                if( (i + gic->irq_offset) == 57 ){
+                    rmnet_irq_flag_rx = 1;
+                    //printk("%s: [data] Johnny test\n", __func__);
+                }
+                //ASUS_BSP --- Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 57
+
+                //ASUS_BSP +++ Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 260
+                if( (i + gic->irq_offset) == 260 ){
+                    rmnet_irq_flag_rx_260 = 1;
+                    //printk("%s: [data] Johnny test\n", __func__);
+                }
+                //ASUS_BSP --- Johnny [Qcom][PS][][ADD]Print first IP address log when IRQ 260
 	}
+	//[+++][Power]Save maxmum count to 8
+	if (gic_irq_cnt >= 8)
+		gic_irq_cnt = 7;
+	//[---][Power]Save maxmum count to 8
 }
 
 static void gic_resume_one(struct gic_chip_data *gic)

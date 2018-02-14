@@ -2519,12 +2519,23 @@ static ssize_t qpnp_adc_show(struct device *dev,
 	struct qpnp_vadc_chip *vadc = dev_get_drvdata(dev);
 	struct qpnp_vadc_result result;
 	int rc = -1;
+	char tempbuf[20]={0};
 
 	rc = qpnp_vadc_read(vadc, attr->index, &result);
 
 	if (rc) {
 		pr_err("VADC read error with %d\n", rc);
 		return 0;
+	}
+
+	sscanf(devattr->attr.name, "%s", tempbuf);
+	if (!strcmp(tempbuf, "die_temp_asus")) {
+                return snprintf(buf, QPNP_ADC_HWMON_NAME_LENGTH,
+                "%lld\n", result.physical);
+        }
+	else if(!strcmp(tempbuf, "pmi8952_mpp1_temp")){
+		return snprintf(buf, QPNP_ADC_HWMON_NAME_LENGTH,
+                "%lld\n", result.physical*1000);
 	}
 
 	return snprintf(buf, QPNP_ADC_HWMON_NAME_LENGTH,
