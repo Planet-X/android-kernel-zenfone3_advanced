@@ -779,6 +779,11 @@ CONFIG_INPUT_CM3323E=y
 CONFIG_IOSCHED_TEST=n
 
 #
+# Misc
+#
+CONFIG_POWERSUSPEND=y
+
+#
 # Qualcomm Atheros Prima WLAN module
 #
 # CONFIG_PRIMA_WLAN is not set
