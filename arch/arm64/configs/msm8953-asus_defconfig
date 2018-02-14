@@ -788,6 +788,11 @@ CONFIG_PSTORE_FTRACE=y
 CONFIG_PSTORE_RAM=y
 
 #
+# Misc
+#
+CONFIG_POWERSUSPEND=y
+
+#
 # Qualcomm Atheros Prima WLAN module
 #
 # CONFIG_PRIMA_WLAN is not set
