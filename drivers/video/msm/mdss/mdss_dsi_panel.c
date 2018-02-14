@@ -1074,7 +1074,7 @@ static int mdss_dsi_panel_apply_display_setting(struct mdss_panel_data *pdata,
 				(lp_on_cmds->cmd_cnt))
 			mdss_dsi_panel_apply_settings(ctrl, lp_on_cmds);
 	else if ((mode == MDSS_PANEL_LOW_PERSIST_MODE_OFF) &&
-			(lp_on_cmds->cmd_cnt))
+			(lp_off_cmds->cmd_cnt))
 		mdss_dsi_panel_apply_settings(ctrl, lp_off_cmds);
 	else
 		return -EINVAL;
@@ -1384,7 +1384,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
 
 	ftxxxx_ts_resume();/*nancy+++*/
-
 
 	mdss_dsi_panel_on_hdmi(ctrl, pinfo);
 

@@ -74,6 +74,12 @@ static struct work_struct __dumpmem_work;
 struct work_struct __dumpthread_work;
 static int dumppid;
 static int dumppid_tasksize;
+
+/* to enable lowmemorykiller */
+static int enable_lmk = 1;
+module_param_named(enable_lmk, enable_lmk, int,
+	S_IRUGO | S_IWUSR);
+
 static uint32_t lowmem_debug_level = 1;
 static short lowmem_adj[6] = {
 	0,
@@ -102,6 +108,9 @@ static int lmk_fast_run = 1;
 static unsigned long lowmem_count(struct shrinker *s,
 				  struct shrink_control *sc)
 {
+	if (!enable_lmk)
+		return 0;
+
 	return global_page_state(NR_ACTIVE_ANON) +
 		global_page_state(NR_ACTIVE_FILE) +
 		global_page_state(NR_INACTIVE_ANON) +

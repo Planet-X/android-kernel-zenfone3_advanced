@@ -965,13 +965,17 @@ static void gsi_ring_db(struct usb_ep *ep, struct usb_gsi_request *request)
 
 	gsi_dbl_address_lsb = devm_ioremap_nocache(mdwc->dev,
 					dbl_lo_addr, sizeof(u32));
-	if (!gsi_dbl_address_lsb)
-		dev_dbg(mdwc->dev, "Failed to get GSI DBL address LSB\n");
+	if (!gsi_dbl_address_lsb) {
+		dev_err(mdwc->dev, "Failed to get GSI DBL address LSB\n");
+		return;
+	}
 
 	gsi_dbl_address_msb = devm_ioremap_nocache(mdwc->dev,
 					dbl_hi_addr, sizeof(u32));
-	if (!gsi_dbl_address_msb)
-		dev_dbg(mdwc->dev, "Failed to get GSI DBL address MSB\n");
+	if (!gsi_dbl_address_msb) {
+		dev_err(mdwc->dev, "Failed to get GSI DBL address MSB\n");
+		return;
+	}
 
 	offset = dwc3_trb_dma_offset(dep, &dep->trb_pool[num_trbs-1]);
 	dev_dbg(mdwc->dev, "Writing link TRB addr:%pKa to %pK (%x) for ep:%s\n",
@@ -2667,8 +2671,8 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		switch (psy->type) {
 		case POWER_SUPPLY_TYPE_USB:
 			mdwc->chg_type = DWC3_SDP_CHARGER;
+                        mdwc->voltage_max = MICRO_5V;
 			evt_mode_string = "USB";
-			mdwc->voltage_max = MICRO_5V;
 			#if defined(CONFIG_UNKNOWN_CHARGER)
 			// ASUS_BSP "Add Unknown Charger Support"
 			dev_dbg(mdwc->dev, "SDP/CDP present, cancel unknown_chg_work\n");
@@ -2677,7 +2681,11 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			break;
 		case POWER_SUPPLY_TYPE_USB_DCP:
 			mdwc->chg_type = DWC3_DCP_CHARGER;
+                        mdwc->voltage_max = MICRO_5V;
 			evt_mode_string = "ASUS AC";
+			break;
+		case POWER_SUPPLY_TYPE_USB_DCP:
+			mdwc->chg_type = DWC3_DCP_CHARGER;
 			mdwc->voltage_max = MICRO_5V;
 			break;
 		case POWER_SUPPLY_TYPE_USB_HVDCP:
@@ -2687,8 +2695,8 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			break;
 		case POWER_SUPPLY_TYPE_USB_CDP:
 			mdwc->chg_type = DWC3_CDP_CHARGER;
-			evt_mode_string = "ASUS AC";
 			mdwc->voltage_max = MICRO_5V;
+                        evt_mode_string = "ASUS AC";
 			break;
 		case POWER_SUPPLY_TYPE_USB_ACA:
 			mdwc->chg_type = DWC3_PROPRIETARY_CHARGER;
