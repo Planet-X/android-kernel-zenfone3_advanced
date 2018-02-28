@@ -58,12 +58,6 @@ enum btsco_rates {
 	RATE_16KHZ_ID,
 };
 
-/* ASUS_BSP Paul +++ */
-#include <linux/switch.h>
-struct switch_dev *g_audiowizard_force_preset_sdev = NULL;
-int g_gpio_audio_debug;
-/* ASUS_BSP Paul --- */
-
 static int msm8952_auxpcm_rate = 8000;
 static int msm_btsco_rate = BTSCO_RATE_8KHZ;
 static int msm_btsco_ch = 1;
@@ -3094,28 +3088,6 @@ parse_mclk_freq:
 		id = DEFAULT_MCLK_RATE;
 	}
 	pdata->mclk_freq = id;
-
-	/* ASUS_BSP Paul +++ */
-	g_gpio_audio_debug = of_get_named_gpio(pdev->dev.of_node, "AUDIO_DEBUG", 0);
-	if (g_gpio_audio_debug < 0)
-		printk("%s: property AUDIO_DEBUG not found\n", __func__);
-	else
-		printk("%s: get g_gpio_audio_debug %d\n", __func__, g_gpio_audio_debug);
-
-	if (!g_audiowizard_force_preset_sdev) {
-		g_audiowizard_force_preset_sdev = kzalloc(sizeof(struct switch_dev), GFP_KERNEL);
-		if (!g_audiowizard_force_preset_sdev) {
-			pr_err("%s: failed to allocate switch_dev\n", __func__);
-			ret = -ENOMEM;
-			goto err;
-		}
-		g_audiowizard_force_preset_sdev->name = "audiowizard_force_preset";
-		g_audiowizard_force_preset_sdev->state = 0;
-		ret = switch_dev_register(g_audiowizard_force_preset_sdev);
-		if (ret < 0)
-			pr_err("%s: failed to register switch audiowizard_force_preset\n", __func__);
-	}
-	/* ASUS_BSP Paul --- */
 
 	/*reading the gpio configurations from dtsi file*/
 	ret = msm_gpioset_initialize(CLIENT_WCD_INT, &pdev->dev);
