@@ -208,7 +208,6 @@ static int IICErrorCountor = 0;
 #define FTXXXX_TP0_PIN_NAME  "TP0-pin"
 #define FTXXXX_TP1_PIN_NAME  "TP1-pin"
 extern bool proximity_check_status(void);
-extern int get_audiomode(void);
 
 /*
 *ftxxxx_i2c_Read-read data and write data by i2c
@@ -432,7 +431,7 @@ static void check_gesture(struct ftxxxx_ts_data *data, int gesture_id)
 
 	printk("[Focal][Touch] %s :  gesture_id = 0x%x\n ", __func__, gesture_id);
 
-	if ((EnableProximityCheck && !ftxxxx_ts->cover_mode_eable) && !(get_audiomode()==2))
+	if ((EnableProximityCheck && !ftxxxx_ts->cover_mode_eable))
 	{	
 		Ps_status = proximity_check_status();
 		printk("[touch]check proximity status  \n");

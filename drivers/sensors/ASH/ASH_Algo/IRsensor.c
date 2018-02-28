@@ -98,7 +98,6 @@ static 		DECLARE_DELAYED_WORK(light_polling_lux_work, light_polling_lux);
 
 /*Disable touch for detecting near when phone call*/
 extern void ftxxxx_disable_touch(bool flag);
-extern int get_audiomode(void);
 
 /*Proximity auto calibration*/
 static int proximity_check_minCT(void);
@@ -1186,7 +1185,6 @@ static IRsensor_ATTR mIRsensor_ATTR = {
 static void proximity_work(int state)
 {
 	int adc = 0;
-	int audio_mode = 0;
 
 	/* Get Proximity adc value */
 	adc= IRsensor_hw_client->mpsensor_hw->proximity_hw_get_adc();
@@ -1203,18 +1201,10 @@ static void proximity_work(int state)
 			log("[ISR] Proximity Detect Object Away. (adc = %d)\n", adc);
 			psensor_report_abs(IRSENSOR_REPORT_PS_AWAY);
 			g_ps_data->event_counter++;	/* --- For stress test debug --- */
-			audio_mode = get_audiomode();
-			if (2 == audio_mode || 3 == audio_mode) {
-				ftxxxx_disable_touch(false);
-			}
 		} else if (IRSENSOR_INT_PS_CLOSE == state) {
 			log("[ISR] Proximity Detect Object Close. (adc = %d)\n", adc);		
 			psensor_report_abs(IRSENSOR_REPORT_PS_CLOSE);
 			g_ps_data->event_counter++;	/* --- For stress test debug --- */
-			audio_mode = get_audiomode();
-			if (2 == audio_mode || 3 == audio_mode) {
-				ftxxxx_disable_touch(true);
-			}
 		} else {
 			err("[ISR] Proximity Detect Object ERROR. (adc = %d)\n", adc);
 		}
