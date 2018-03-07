@@ -46,7 +46,6 @@ Module.symvers
 /vmlinuz
 /System.map
 /Module.markers
-/zip
 /build.sh
 
 #
