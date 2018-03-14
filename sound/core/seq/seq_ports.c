@@ -121,7 +121,6 @@ static void port_subs_info_init(struct snd_seq_port_subs_info *grp)
 	grp->close = NULL;
 }
 
-
 /* create a port, port number is returned (-1 on failure);
  * the caller needs to unref the port via snd_seq_port_unlock() appropriately
  */
