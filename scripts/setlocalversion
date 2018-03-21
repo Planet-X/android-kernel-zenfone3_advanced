@@ -171,6 +171,11 @@ fi
 # CONFIG_LOCALVERSION and LOCALVERSION (if set)
 res="${res}${CONFIG_LOCALVERSION}${LOCALVERSION}"
 
+# Append overclocking suffix to the kernel version string, if enabled.
+if test "$CONFIG_CPU_FREQ_MSM_OVERCLOCK_MSM8953" = "y"; then
+         res="$res-OC"
+fi
+
 # scm version string if not at a tagged commit
 if test "$CONFIG_LOCALVERSION_AUTO" = "y"; then
 	# full scm version string
