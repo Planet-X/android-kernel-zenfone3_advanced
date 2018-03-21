@@ -254,3 +254,11 @@ config CPU_FREQ_MSM
 	default y
 	help
 	  This enables the CPUFreq driver for Qualcomm CPUs.
+	  
+config CPU_FREQ_MSM_OVERCLOCK_MSM8953
+	bool "Overclock the MSM8953 soc"
+	default n
+	help
+	  Allow overclocking of the MSM8953 platform. Up to 2.2 GHz.
+	  
+	  If in doubt, say N.
