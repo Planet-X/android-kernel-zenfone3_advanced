@@ -1467,7 +1467,7 @@ static ssize_t vmax_show(struct device *dev,
 
 	mv = (val >> QPNP_HAP_VMAX_SHIFT) * QPNP_HAP_VMAX_MIN_MV; //approximate value
 
-	return snprintf(buf, PAGE_SIZE, "reg=0x%x, %dmv\n", val, mv);
+	return snprintf(buf, PAGE_SIZE, "%d\n", mv);
 }
 
 static ssize_t vmax_store(struct device *dev, 
