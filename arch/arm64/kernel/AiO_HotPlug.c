@@ -247,8 +247,8 @@ static void __ref AiO_HotPlug_stop(void)
 {
 	int cpu;
 
-	flush_workqueue(AiO_wq);
 	cancel_delayed_work_sync(&AiO_work);
+	destroy_workqueue(AiO_wq);
 
 	/* Wake-Up All the Cores */
 	for_each_possible_cpu(cpu)
