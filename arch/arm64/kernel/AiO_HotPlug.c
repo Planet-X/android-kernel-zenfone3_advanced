@@ -222,6 +222,9 @@ static void __ref AiO_HotPlug_work(struct work_struct *work)
 	queue_delayed_work(AiO_wq, &AiO_work, msecs_to_jiffies(1000));
 }
 
+#ifdef CONFIG_SCHED_CORE_CTL
+extern void disable_core_control(bool disable);
+#endif
 static int AiO_HotPlug_start(void)
 {
 	int ret = 0;
@@ -240,6 +243,10 @@ static int AiO_HotPlug_start(void)
 	return ret;
 
 err_out:
+#ifdef CONFIG_SCHED_CORE_CTL
+	disable_core_control(false);
+#endif
+	AiO.toggle = 0;
 	return ret;
 }
 
@@ -281,11 +288,17 @@ static ssize_t store_toggle(struct kobject *kobj,
 	AiO.toggle = val;
 	AiO_HotPlug = AiO.toggle;
 
-	if (AiO.toggle)
+	if (AiO.toggle) {
+#ifdef CONFIG_SCHED_CORE_CTL
+	   disable_core_control(true);
+#endif
 	   AiO_HotPlug_start();
-	else
+	} else {
 	   AiO_HotPlug_stop();
-
+#ifdef CONFIG_SCHED_CORE_CTL
+	   disable_core_control(false);
+#endif
+	}
 	return count;
 }
 
