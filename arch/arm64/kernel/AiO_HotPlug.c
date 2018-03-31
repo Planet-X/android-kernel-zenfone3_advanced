@@ -229,23 +229,25 @@ void reschedule_AiO(void)
 	queue_delayed_work(AiO_wq, &AiO_work, msecs_to_jiffies(1000));
 }
 
-static void AiO_HotPlug_start(void)
+static int AiO_HotPlug_start(void)
 {
+	int ret = 0;
+
 	AiO_wq = alloc_workqueue("AiO_HotPlug_wq", WQ_HIGHPRI | WQ_FREEZABLE, 0);
 	if (!AiO_wq) 
 	{
 	   pr_err("%s: Failed to allocate AiO workqueue\n", AIO_HOTPLUG);
+	   ret = -ENOMEM;
 	   goto err_out;
 	}
 
 	INIT_DELAYED_WORK(&AiO_work, AiO_HotPlug_work);
 	reschedule_AiO();
 
-	return;
+	return ret;
 
 err_out:
-	AiO.toggle = 0;
-	return;
+	return ret;
 }
 
 static void __ref AiO_HotPlug_stop(void)
