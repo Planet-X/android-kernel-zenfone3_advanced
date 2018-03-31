@@ -218,14 +218,7 @@ static void __ref AiO_HotPlug_work(struct work_struct *work)
 	           	   cpu_up(7);
                 }
           #endif
-}
 
-void reschedule_AiO(void)
-{
-	if (!AiO.toggle)
-	   return;
-
-	cancel_delayed_work_sync(&AiO_work);
 	queue_delayed_work(AiO_wq, &AiO_work, msecs_to_jiffies(1000));
 }
 
@@ -242,7 +235,7 @@ static int AiO_HotPlug_start(void)
 	}
 
 	INIT_DELAYED_WORK(&AiO_work, AiO_HotPlug_work);
-	reschedule_AiO();
+	queue_delayed_work(AiO_wq, &AiO_work, msecs_to_jiffies(1000));
 
 	return ret;
 
@@ -317,8 +310,6 @@ static ssize_t store_cores(struct kobject *kobj,
 
 	AiO.cores = val;
 
-	reschedule_AiO();
-
 	return count;
 }
 #elif (NR_CPUS == 6 || NR_CPUS == 8)
@@ -351,8 +342,6 @@ static ssize_t store_big_cores(struct kobject *kobj,
 
 	AiO.big_cores = val;
 
-	reschedule_AiO();
-
 	return count;
 }
 
@@ -376,8 +365,6 @@ static ssize_t store_LITTLE_cores(struct kobject *kobj,
 	   return -EINVAL;
 
 	AiO.LITTLE_cores = val;
-
-	reschedule_AiO();
 
 	return count;
 }
