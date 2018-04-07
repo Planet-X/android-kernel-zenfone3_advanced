@@ -3271,7 +3271,7 @@ static DEVICE_ATTR(keypad_mode, Focal_RW_ATTR, switch_keypad_mode_show, switch_k
 static DEVICE_ATTR(HW_ID, Focal_RW_ATTR, asus_get_hwid_show, NULL);
 static DEVICE_ATTR(IRQ_FORCE_DISABLE, Focal_RW_ATTR, irq_disable_show, irq_disable_store);
 static DEVICE_ATTR(IRQ_status, Focal_RW_ATTR, irq_status_show, NULL);
-static DEVICE_ATTR(Enable_Proximyty_Check, Focal_RW_ATTR, enable_proximity_check_show, enable_proximity_check_store);
+static DEVICE_ATTR(Enable_Proximity_Check, Focal_RW_ATTR, enable_proximity_check_show, enable_proximity_check_store);
 static DEVICE_ATTR(FT_ID, Focal_RW_ATTR, ftxxxx_ftid_show, NULL);
 static DEVICE_ATTR(Touch_IC_ID, Focal_RW_ATTR, ftxxxx_touchic_show, NULL);
 /*read force touch location pressure
@@ -3320,7 +3320,7 @@ static struct attribute *ftxxxx_attributes[] = {
 	&dev_attr_swipeup_mode.attr,
 	&dev_attr_IRQ_FORCE_DISABLE.attr,
 	&dev_attr_IRQ_status.attr,
-	&dev_attr_Enable_Proximyty_Check.attr,
+	&dev_attr_Enable_Proximity_Check.attr,
 	&dev_attr_ftsfwupgradeall.attr,
 	&dev_attr_FT_ID.attr,
 	&dev_attr_tp_id_ic.attr,
