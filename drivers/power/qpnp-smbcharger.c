@@ -1911,6 +1911,19 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 		rc = vote(chip->usb_suspend_votable, USB_EN_VOTER, false, 0);
 	}
 
+#ifdef CONFIG_FORCE_FAST_CHARGE
+	if(force_fast_charge > 0){
+		printk("[BAT][CHG] WARNING: Force fast charge enabled!");
+		current_ma = CURRENT_1910_MA;
+		rc = smbchg_set_high_usb_chg_current(chip, current_ma);
+		rc = smbchg_masked_write(chip, chip->usb_chgpth_base + CMD_IL,
+			ICL_OVERRIDE_BIT, ICL_OVERRIDE_BIT);
+		if (rc < 0)
+			pr_err("Couldn't set ICL override rc = %d\n", rc);
+		goto out;
+	}
+#endif
+
 	switch (chip->usb_supply_type) {
 	case POWER_SUPPLY_TYPE_USB:
 		if ((current_ma < CURRENT_150_MA) &&
@@ -2018,11 +2031,7 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 			}
 			chip->usb_max_current_ma = 500;
 		}
-#ifdef CONFIG_FORCE_FAST_CHARGE
-		if ((force_fast_charge > 0 && current_ma == CURRENT_500_MA) || current_ma == CURRENT_900_MA) {
-#else
 		if (current_ma == CURRENT_900_MA) {
-#endif
 			rc = smbchg_sec_masked_write(chip,
 					chip->usb_chgpth_base + CHGPTH_CFG,
 					CFG_USB_2_3_SEL_BIT, CFG_USB_3);
@@ -5861,7 +5870,11 @@ void thermal_level_control(struct smbchg_chip *chip)
 		case 0:	
 			thermal_suspend_charging = 0;
 			if (chip->CHG_TYPE_flag == TYPEC_3P0A || chip->CHG_TYPE_flag == ASUS_750K || 
+#ifdef CONFIG_FORCE_FAST_CHARGE
+				chip->CHG_TYPE_flag == ASUS_200K || chip->CHG_TYPE_flag == PB_2A || chip->CHG_TYPE_flag == DCP_2A || force_fast_charge > 0)
+#else
 				chip->CHG_TYPE_flag == ASUS_200K || chip->CHG_TYPE_flag == PB_2A || chip->CHG_TYPE_flag == DCP_2A)
+#endif
 				ICL = USBIN_IL_1910mA;
 			else if (chip->CHG_TYPE_flag == TYPEC_1P5A || chip->CHG_TYPE_flag == CDP)
 				ICL = USBIN_IL_1400mA;
