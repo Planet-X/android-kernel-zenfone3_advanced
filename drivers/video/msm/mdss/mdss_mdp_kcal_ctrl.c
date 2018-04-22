@@ -404,15 +404,16 @@ static ssize_t kcal_invert_store(struct device *dev,
 	struct kcal_lut_data *lut_data = dev_get_drvdata(dev);
 
 	r = kstrtoint(buf, 10, &kcal_invert);
-	if ((r) || (kcal_invert != 0 && kcal_invert != 1) ||
-		(lut_data->invert == kcal_invert))
+	if ((r) || (kcal_invert != 0 && kcal_invert != 1))
 		return -EINVAL;
 
-	lut_data->invert = kcal_invert;
+	if(lut_data->invert != kcal_invert)
+        {
+		lut_data->invert = kcal_invert;
 
-	mdss_mdp_kcal_update_igc(lut_data);
-	mdss_mdp_kcal_display_commit();
-
+		mdss_mdp_kcal_update_igc(lut_data);
+		mdss_mdp_kcal_display_commit();
+        }
 	return count;
 }
 
