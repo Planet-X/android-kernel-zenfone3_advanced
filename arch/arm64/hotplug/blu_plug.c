@@ -29,13 +29,13 @@
 #define INIT_DELAY		(20000) /* Initial delay to 60 sec, 4 cores while boot */
 #define DELAY			(150)
 #define UP_THRESHOLD		(70)
-#define MIN_ONLINE		(1)
-#define MAX_ONLINE		(4)
+#define MIN_ONLINE		(2)
+#define MAX_ONLINE		(8)
 #define DEF_DOWN_TIMER_CNT	(6)	/* 3 secs */
 #define DEF_UP_TIMER_CNT	(2)	/* 1 sec */
-#define MAX_CORES_SCREENOFF (1)
-#define MAX_FREQ_SCREENOFF (1026000)
-#define MAX_FREQ_PLUG (1512000)
+#define MAX_CORES_SCREENOFF (4)
+#define MAX_FREQ_SCREENOFF (1689600)
+#define MAX_FREQ_PLUG (2016000)
 #define DEF_PLUG_THRESHOLD 0
 #define BLU_PLUG_ENABLED 0
 
