@@ -116,10 +116,13 @@ static int __init vdso_init(void)
 	int i;
 	unsigned long pfn;
 
+	__diag_push();
+	__diag_ignore(GCC_8, "-Wstringop-overflow");
 	if (memcmp(&vdso_start, "\177ELF", 4)) {
 		pr_err("vDSO is not a valid ELF object!\n");
 		return -EINVAL;
 	}
+	__diag_pop();
 
 	vdso_pages = (&vdso_end - &vdso_start) >> PAGE_SHIFT;
 	pr_info("vdso: %ld pages (%ld code @ %p, %ld data @ %p)\n",
