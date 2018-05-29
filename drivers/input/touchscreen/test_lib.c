@@ -2004,11 +2004,11 @@ bool NeedRxOnVal(unsigned char chVal)
 }
 bool NeedTxOffVal(unsigned char chVal)
 {
-       return 0x00 == (chVal & 0x03) || 0x10 == ( chVal & 0x03 );
+       return 0x00 == (chVal & 0x03);
 }
 bool NeedRxOffVal(unsigned char chVal)
 { 
-       return 0x01 == (chVal & 0x03) || 0x10 == ( chVal & 0x03 );
+       return 0x01 == (chVal & 0x03);
 }
 unsigned char GetChannelNumNoMapping(void)
 {
