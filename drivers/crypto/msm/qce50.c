@@ -4620,11 +4620,10 @@ again:
 			pce_dev->intr_cadence = 0;
 			atomic_set(&pce_dev->bunch_cmd_seq, 0);
 			atomic_set(&pce_dev->last_intr_seq, 0);
-                        #pragma GCC diagnostic push
-                        #pragma GCC diagnostic ignored "-Wpragmas"
-                        #pragma GCC diagnostic ignored "-Wbool-operation"
-                        pce_dev->cadence_flag = ~pce_dev->cadence_flag;
-                        #pragma GCC diagnostic pop
+			__diag_push();
+			__diag_ignore(GCC_7, "-Wbool-operation");
+			pce_dev->cadence_flag = ~pce_dev->cadence_flag;
+			 __diag_pop();
 		}
 	}
 

@@ -1330,16 +1330,12 @@ static int msm_probe(struct platform_device *pdev)
 	rc = media_device_register(msm_v4l2_dev->mdev);
 	if (WARN_ON(rc < 0))
 		goto media_fail;
-
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wpragmas"
-        #pragma GCC diagnostic ignored "-Wbool-compare"
-        if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
+	__diag_push();
+	__diag_ignore(GCC_7, "-Wbool-compare");
+	if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
 			0, NULL, 0)) < 0))
 		goto entity_fail;
-        #pragma GCC diagnostic pop
-	
-
+	__diag_pop();
 	pvdev->vdev->entity.type = MEDIA_ENT_T_DEVNODE_V4L;
 	pvdev->vdev->entity.group_id = QCAMERA_VNODE_GROUP_ID;
 #endif

@@ -1059,12 +1059,10 @@ static int mdss_mdp_video_wait4comp(struct mdss_mdp_ctl *ctl, void *arg)
 		if (rc == 0) {
 			pr_warn("vsync wait timeout %d, fallback to poll mode\n",
 					ctl->num);
-                        #pragma GCC diagnostic push
-                        #pragma GCC diagnostic ignored "-Wpragmas"
-                        #pragma GCC diagnostic ignored "-Wbool-operation"
-                        ctx->polling_en++;
-                        #pragma GCC diagnostic pop
-			
+			__diag_push();
+			__diag_ignore(GCC_7, "-Wbool-operation");
+			ctx->polling_en++;
+			 __diag_pop();
 			rc = mdss_mdp_video_pollwait(ctl);
 		} else {
 			rc = 0;
