@@ -1874,8 +1874,6 @@ static void mmc_dump_status(struct mmc_card *card, u8 *ext_csd)
 			card->ext_csd.device_life_time[1],
 			card->ext_csd.pre_eol_info);
 			pr_info("%s", mmc_status);
-
-	ASUSEvtlog("%s", mmc_status);
 }
 	
 static int mmc_check_status(struct mmc_card *card)

@@ -904,7 +904,6 @@ bool pm_get_wakeup_count(unsigned int *count, bool block)
 /*[+++]Debug for active wakelock before entering suspend*/
 			if (!g_resume_status){
 				printk("[PM] pm_get_wakeup_count():try to suspend wakelock\n");
-				ASUSEvtlog("[PM] try to suspend wakelock\n");
 				print_active_locks();
 			}
 /*[---]Debug for active wakelock before entering suspend*/
@@ -1059,7 +1058,6 @@ void print_active_locks(void)
 	if (ws->active){
 		wl_active_cnt++;
 		printk("[PM]print_active_locks(): %s\n", ws->name);
-		ASUSEvtlog("[PM] active wake lock: %s\n", ws->name);
 		if (pmsp_flag == 1) {
 			if(strncmp(ws->name, "PowerManagerService", strlen("PowerManagerService")) == 0)
 				pmsp_print(); /*call pms_printer_func() to send uevent 0 or 1: kernel/kernel/power/autosleep.c*/
@@ -1076,7 +1074,6 @@ void print_active_locks(void)
 
 	if (wl_active_cnt == 0){
 		printk("[PM] print_active_locks():all wakelock are inactive\n");
-		ASUSEvtlog("[PM] all wakelock are inactive\n");
 	}
 
     //rcu_read_unlock();
