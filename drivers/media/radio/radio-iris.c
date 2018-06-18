@@ -4098,9 +4098,6 @@ static int iris_vidioc_s_ctrl(struct file *file, void *priv,
 				//+++Alpha:"create proc mode file to monitor FM enable/disable status"+++
 				FMStatus = 1;
 				//---Alpha:"create proc mode file to monitor FM enable/disable status"---
-				//ASUS_BSP+++ Cumo_Lin "[ZE552KL][FM][NA][Spec] add ASUSEvtlog for FM"
-				ASUSEvtlog("[FM] On\n");
-				//ASUS_BSP--- Cumo_Lin "[ZE552KL][FM][NA][Spec] add ASUSEvtlog for FM"
 			}
 			if (radio->mode == FM_RECV_TURNING_ON) {
 				radio->mode = FM_RECV;
@@ -4152,9 +4149,6 @@ static int iris_vidioc_s_ctrl(struct file *file, void *priv,
 					//+++Alpha:"create proc mode file to monitor FM enable/disable status"+++
 					FMStatus = 0;
 					//---Alpha:"create proc mode file to monitor FM enable/disable status"---
-				    //ASUS_BSP+++ Cumo_Lin "[ZE552KL][FM][NA][Spec] add ASUSEvtlog for FM"
-				    ASUSEvtlog("[FM] Off\n");
-				    //ASUS_BSP--- Cumo_Lin "[ZE552KL][FM][NA][Spec] add ASUSEvtlog for FM"
 				}
 				break;
 			case FM_TRANS:

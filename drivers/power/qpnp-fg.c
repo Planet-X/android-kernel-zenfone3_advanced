@@ -9595,7 +9595,7 @@ int print_battery_status(void) {
 		ocv,
 		socSts,
 		battSts);
-	ASUSEvtlog("[BAT][Ser]%s", battInfo);
+	printk("[BAT][Ser]%s", battInfo);
 	BAT_DBG("%s: %s", __func__, additionBattInfo);
 	g_last_print_time = current_kernel_time();
 	return 0;

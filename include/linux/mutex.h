@@ -65,7 +65,6 @@ struct mutex {
 	struct lockdep_map	dep_map;
 #endif
 	const char *		name;
-	struct task_struct *	mutex_owner_asusdebug;
 };
 
 /*

@@ -426,7 +426,6 @@ DEFINE_TIMER(unattended_timer, unattended_timer_expired, 0, 0);
 void unattended_timer_expired(unsigned long data)
 {
 	printk("[PM] unattended_timer_expired()\n");
-	ASUSEvtlog("[PM]unattended_timer_expired\n");
 	pmsp_flag=1;
 /*for dump cpuinfo purpose, it needs 30mins to timeout*/
 	pm_stay_unattended_period += PM_UNATTENDED_TIMEOUT;

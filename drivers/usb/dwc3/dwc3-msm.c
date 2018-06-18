@@ -2629,7 +2629,6 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 
 		mdwc->vbus_active = val->intval;
 		if(!mdwc->vbus_active){
-			//ASUSEvtlog("[USB] set_chg_mode: None\n");
 			#if defined(CONFIG_UNKNOWN_CHARGER)
 			// ASUS_BSP "Add Unknown Charger Support"
 			dev_dbg(mdwc->dev, "VBUS absent, cancel unknown_chg_work\n");
@@ -2726,9 +2725,6 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 
 		if (mdwc->chg_type != DWC3_INVALID_CHARGER)
 			mdwc->chg_state = USB_CHG_STATE_DETECTED;
-
-		if (evt_mode_string != NULL)
-			//ASUSEvtlog("[USB] set_chg_mode: %s\n", evt_mode_string);
 
 		dev_dbg(mdwc->dev, "%s: charger type: %s\n", __func__,
 				chg_to_string(mdwc->chg_type));
@@ -2988,7 +2984,6 @@ static void asus_otg_chg_unknown_delay_work(struct work_struct *w)
 	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, unknown_chg_work.work);
 	if(test_bit(B_SESS_VLD, &mdwc->inputs)){
 		printk("%s: B_SESS_VLD is set, report unknown charger\n", __func__);
-		//ASUSEvtlog("[USB] set_chg_mode: USB -> UNKNOWN_CHARGER\n");
 		is_Unknown_Chg_detect = true;
 		mdwc->chg_type = DWC3_UNKNOWN_CHARGER;
 		mdwc->otg_state = OTG_STATE_B_IDLE;

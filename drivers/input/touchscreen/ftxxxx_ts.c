@@ -322,7 +322,6 @@ int ftxxxx_i2c_Write(struct i2c_client *client, char *writebuf, int writelen)
 			if (IICErrorCountor >= 10) {
 				dev_err(&client->dev, "[Focal][TOUCH_ERR] %s: i2c read/write error over 10 times !! \n", __func__);
 				dev_err(&client->dev, "[Focal][TOUCH_ERR] %s: excute reset IC process !! \n", __func__);
-				//ASUSEvtlog("[Touch] touch i2c read/write error over 10 times, reset IC \n");	
 				printk("[Touch] touch i2c read/write error over 10 times, reset IC \n");
 				queue_work(ftxxxx_ts->reset_wq, &ftxxxx_ts->reset_ic_work);
 				return ret;
@@ -1811,13 +1810,6 @@ printk("[Focal][Touch] TPID= %x \n",ftxxxx_read_tp_id());
 
 	ftxxxx_irq_enable(ftxxxx_ts->client);
 
-	/*if (tmp_err) {
-		
-		//ASUSEvtlog("[Touch][ERROR] FW update error, reset IC \n");
-		printk("[Touch][ERROR] FW update error, reset IC \n");
-		queue_work(ftxxxx_ts->reset_wq, &ftxxxx_ts->reset_ic_work);
-
-	}*/
 	printk("[Progress][Focal-Touch] WQ ends !\n");
 
 	return;

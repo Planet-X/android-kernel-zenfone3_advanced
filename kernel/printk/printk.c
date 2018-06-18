@@ -243,52 +243,6 @@ __packed __aligned(4)
  */
 static DEFINE_RAW_SPINLOCK(logbuf_lock);
 
-static char *asus_log_buf = NULL;
-static bool is_logging_to_asus_buffer = false;
-void *memset_nc(void *s, int c, size_t count);
-
-/* this memcpy_nc() is for non cached memory */
-static void *memcpy_nc(void *dest, const void *src, size_t n)
-{
-	int i = 0;
-	u8 *d = (u8 *)dest, *s = (u8 *)src;
-	for (i = 0; i < n; i++)
-		d[i] = s[i];
-
-	return dest;
-}
-
-static int write_to_asus_log_buffer(const char *text, size_t text_len,
-				enum log_flags lflags) {
-	static ulong log_write_index = 0; /* the index to write the log in asus log buffer */
-
-	if (!asus_log_buf) {
-		return -1;
-	}
-
-	if (log_write_index >= PRINTK_BUFFER_SLOT_SIZE) {
-		return -2;
-	}
-
-	if (log_write_index + text_len >= PRINTK_BUFFER_SLOT_SIZE) {
-		ulong part1 = PRINTK_BUFFER_SLOT_SIZE - log_write_index;
-		ulong part2 = text_len -part1;
-		memcpy_nc(asus_log_buf+log_write_index, text, part1);
-		memcpy_nc(asus_log_buf, text + part1, part2);
-		log_write_index = part2;
-	} else {
-		memcpy_nc(asus_log_buf+log_write_index, text, text_len);
-		log_write_index += text_len;
-	}
-
-	if (lflags & LOG_NEWLINE) {
-		asus_log_buf[log_write_index++] = '\n';
-		log_write_index = log_write_index % PRINTK_BUFFER_SLOT_SIZE;
-	}
-
-	return text_len;
-}
-
 #ifdef CONFIG_PRINTK
 DECLARE_WAIT_QUEUE_HEAD(log_wait);
 /* the next printk record to read by syslog(READ) or /proc/kmsg */
@@ -1837,9 +1791,6 @@ asmlinkage int vprintk_emit(int facility, int level,
 	if (dict)
 		lflags |= LOG_PREFIX|LOG_NEWLINE;
 
-	if (is_logging_to_asus_buffer) {
-		write_to_asus_log_buffer(text, text_len, lflags);
-	}
 	if (!(lflags & LOG_NEWLINE)) {
 		/*
 		 * Flush the conflicting buffer. An earlier newline was missing,
@@ -1931,8 +1882,7 @@ asmlinkage int printk_emit(int facility, int level,
 }
 EXPORT_SYMBOL(printk_emit);
 
-extern int g_user_dbg_mode;
-extern unsigned int asusdebug_enable;
+extern unsigned int g_user_dbg_mode;
 /**
  * printk - print a kernel message
  * @fmt: format string
@@ -1958,9 +1908,6 @@ asmlinkage __visible int printk(const char *fmt, ...)
 {
 	va_list args;
 	int r;
-
-	if (asusdebug_enable==0x11223344)
-		return 0;
 
 	if (g_user_dbg_mode==0)
 		return 0;
@@ -2179,7 +2126,6 @@ module_param_named(vminTrace_enabled, is_vminTrace_enabled,
  */
 void suspend_console(void)
 {
-	ASUSEvtlog("[UTS] System Suspend\n");
 	nSuspendInProgress = 1;
 	if (!console_suspend_enabled)
 		return;
@@ -2193,7 +2139,6 @@ void resume_console(void)
 {
 	int i;
 	nSuspendInProgress = 0;
-	ASUSEvtlog("[UTS] System Resume\n");
 	if (is_ramdump_enabled) {
 		printk("[PM] QPST RAMDUMP ENABLE: %s\n", is_ramdump_enabled ? "True" : "False");
 		printk("[PM] vminTrace ENABLE(IRQ200) : %s\n", is_vminTrace_enabled ? "True" : "False");
@@ -2208,7 +2153,7 @@ void resume_console(void)
 			if (0 == (vmin_this_count - vmin_Last_count)) {
 				trigger_DL_mode_count++;
 				if (5 == trigger_DL_mode_count) {
-					ASUSEvtlog("[PM] Vmin can't count, download mode triggered\n");
+					printk("[PM] Vmin can't count, download mode triggered\n");
 					BUG_ON(1);
 				}
 			}else {
@@ -2218,12 +2163,12 @@ void resume_console(void)
 		}
 		if (gpio_irq_cnt>0) {
 			for (i=0;i<gpio_irq_cnt;i++)
-				ASUSEvtlog("[PM] GPIO triggered: %d\n", gpio_resume_irq[i]);
+				printk("[PM] GPIO triggered: %d\n", gpio_resume_irq[i]);
 			gpio_irq_cnt=0; //clear log count
 		}
 		if (gic_irq_cnt>0) {
 			for (i=0;i<gic_irq_cnt;i++) {
-				ASUSEvtlog("[PM] IRQs triggered: %d\n", gic_resume_irq[i]);
+				printk("[PM] IRQs triggered: %d\n", gic_resume_irq[i]);
 			}
 			gic_irq_cnt=0;  //clear log count
 		}
@@ -3301,23 +3246,3 @@ void show_regs_print_info(const char *log_lvl)
 }
 
 #endif
-
-void printk_buffer_rebase(void)
-{
-/*
- * This will NOT do real printk buffer rebase.
- * We just set a flag to let vprintk_emit() also write
- * kernel log to our remapped buffer.
- * Then we can save the content of our remapped buffer while rebooting
- * after the device crash.
- */
-	asus_log_buf = (char *) PRINTK_BUFFER_VA;
-	if (!asus_log_buf) {
-		printk("%s: asus_log_buf is NULL\n", __func__);
-		return;
-	}
-	memset_nc(asus_log_buf, 0, PRINTK_BUFFER_SLOT_SIZE);
-	is_logging_to_asus_buffer = true;
-
-}
-EXPORT_SYMBOL(printk_buffer_rebase);

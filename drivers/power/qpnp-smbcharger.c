@@ -105,7 +105,6 @@ struct gpio_control {
 	u32 USB_TEMP_ALERT;
 };
 //ASUS BSP Austin_T : global gpio_control ---
-static unsigned long old_VWC_time; 			//ASUS BSP Austin_T : ASYSEvtlog very weak charger time
 static unsigned long probe_start_time;		//ASUS BSP Austin_T : Adapter detect timer +++
 static struct smbchg_chip *smbchg_dev;		//ASUS BSP Austin_T : global chip
 bool factory_build_flag = 0;				//ASUS BSP Austin_T : FactoryBuild flag
@@ -124,19 +123,6 @@ int AIN2_Value = 0;
 bool battery_dc_property = 0;
 bool stop_thermal_flag = 0;
 //bool boot_sdp_rerun_apsd_flag = 0;
-
-//ASUS BSP Austin_T : Add for ASUSEvtlog "enable_voters"
-/*static char *AEvtlog_enable_voters[] = {
-	"USER_EN_VOTER",
-	"POWER_SUPPLY_EN_VOTER",
-	"USB_EN_VOTER",
-	"WIRELESS_EN_VOTER",
-	"THERMAL_EN_VOTER",
-	"OTG_EN_VOTER",
-	"WEAK_CHARGER_EN_VOTER",
-	"FAKE_BATTERY_EN_VOTER",
-	"NUM_EN_VOTERS"
-};*/
 
 struct smbchg_version_tables {
 	const int			*dc_ilim_ma_table;
@@ -2884,9 +2870,7 @@ static int usb_suspend_vote_cb(struct votable *votable,
 	}
 
 	rc = smbchg_usb_suspend(chip, suspend);
-	if (suspend == true) {
-		ASUSEvtlog("[BAT][CHG] smbchg_usb_suspend, reason = %s\n", client);
-	}
+
 	if (rc < 0)
 		return rc;
 
@@ -8315,10 +8299,6 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 		}
 		if ((reg & ICL_MODE_MASK) != ICL_MODE_HIGH_CURRENT) {
 			printk("[BAT][CHG] usbin_uv_handler ICL_MODE, reg = 0x%xh\n", (reg & ICL_MODE_MASK));
-			if ((jiffies - old_VWC_time) >= 5000) {
-				ASUSEvtlog("[BAT][CHG] usbin_uv_handler: very_weak_charger to suspend, SMBCHGL_USB_ICL_STS_2 = 0x%xh\n", (reg & ICL_MODE_MASK));
-				old_VWC_time = jiffies;
-			}
 			/*
 			 * If AICL is not even enabled, this is either an
 			 * SDP or a grossly out of spec charger. Do not
@@ -10714,7 +10694,6 @@ static int smbchg_probe(struct spmi_device *spmi)
 	factory_build_flag = 0;					//ASUS BSP Austin_T : FactoryBuild flag
 	en_charging_limit = 0;
 	probe_start_time = jiffies;
-	old_VWC_time = 0;
 	thermal_engine_time = jiffies;
 	usb_psy = power_supply_get_by_name("usb");
 	if (!usb_psy) {

@@ -3248,19 +3248,12 @@ wcnss_trigger_config(struct platform_device *pdev)
 		if (IS_ERR(penv->pil)) {
 			dev_err(&pdev->dev, "Peripheral Loader failed on WCNSS.\n");
 
-			//ASUS_BSP+++ "for /data/log/ASUSEvtlog"
-			ASUSEvtlog("[wcnss]: Load WCNSS failed.\n");
-			//ASUS_BSP--- "for /data/log/ASUSEvtlog"
-
 			ret = PTR_ERR(penv->pil);
 			wcnss_disable_pc_add_req();
 			wcnss_pronto_dump_regs();
 		}
 		else {
 			printk("[wcnss]: Load WCNSS image ok.\n");
-			//ASUS_BSP+++ "for /data/log/ASUSEvtlog"
-			ASUSEvtlog("[wcnss]: Load WCNSS image ok.\n");
-			//ASUS_BSP--- "for /data/log/ASUSEvtlog"
 		}
 	} while (pil_retry++ < WCNSS_MAX_PIL_RETRY && IS_ERR(penv->pil));
 
@@ -3541,9 +3534,6 @@ static int wcnss_notif_cb(struct notifier_block *this, unsigned long code,
 			sprintf((char *)(wcnss_ready), "1");
 			printk("[wcnss]: wcnss_ready=1.\n");
 			/*--------------------------------------------------*/
-			//ASUS_BSP+++ "for /data/log/ASUSEvtlog"
-			ASUSEvtlog("[wcnss]: wcnss_notif_cb, Cancel APPS vote for Iris & WCNSS.\n");
-			//ASUS_BSP--- "for /data/log/ASUSEvtlog"
 		}
 	} else if ((code == SUBSYS_BEFORE_SHUTDOWN && data && data->crashed) ||
 			code == SUBSYS_SOC_RESET) {
