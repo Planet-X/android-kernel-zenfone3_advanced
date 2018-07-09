@@ -2514,7 +2514,7 @@ static int ftxxxx_ts_probe(struct i2c_client *client, const struct i2c_device_id
 
 	/* ++++ touch gesture mode support part in ZE552kL ++++ */
 	input_set_capability(input_dev, EV_KEY, KEY_POWER);
-	input_set_capability(input_dev, EV_KEY, KEY_UP);
+	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_UP);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_V);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_Z);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_C);
@@ -2523,7 +2523,7 @@ static int ftxxxx_ts_probe(struct i2c_client *client, const struct i2c_device_id
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_W);
 
 	__set_bit(KEY_POWER, input_dev->keybit);
-	__set_bit(KEY_UP, input_dev->keybit);
+	__set_bit(KEY_GESTURE_UP, input_dev->keybit);
 	__set_bit(KEY_GESTURE_V, input_dev->keybit);
 	__set_bit(KEY_GESTURE_Z, input_dev->keybit);
 	__set_bit(KEY_GESTURE_C, input_dev->keybit);
