@@ -70,7 +70,7 @@
 
 #ifdef FTS_GESTRUE
 /*zax 20140922*/
-#define KEY_GESTURE_U		KEY_POWER
+#define KEY_GESTURE_U		KEY_WAKEUP
 #define KEY_GESTURE_UP		257
 #define KEY_GESTURE_DOWN	258
 #define KEY_GESTURE_LEFT	259
@@ -2513,7 +2513,7 @@ static int ftxxxx_ts_probe(struct i2c_client *client, const struct i2c_device_id
 	/* ---- touch gesture mode not support part in ZE552kL ---- */
 
 	/* ++++ touch gesture mode support part in ZE552kL ++++ */
-	input_set_capability(input_dev, EV_KEY, KEY_POWER);
+	input_set_capability(input_dev, EV_KEY, KEY_WAKEUP);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_UP);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_V);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_Z);
@@ -2522,7 +2522,7 @@ static int ftxxxx_ts_probe(struct i2c_client *client, const struct i2c_device_id
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_S);
 	input_set_capability(input_dev, EV_KEY, KEY_GESTURE_W);
 
-	__set_bit(KEY_POWER, input_dev->keybit);
+	__set_bit(KEY_WAKEUP, input_dev->keybit);
 	__set_bit(KEY_GESTURE_UP, input_dev->keybit);
 	__set_bit(KEY_GESTURE_V, input_dev->keybit);
 	__set_bit(KEY_GESTURE_Z, input_dev->keybit);
