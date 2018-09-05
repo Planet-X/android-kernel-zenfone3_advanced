@@ -480,7 +480,6 @@ int snd_usb_parse_audio_interface(struct snd_usb_audio *chip, int iface_no)
 	unsigned int format = 0, num_channels = 0;
 	struct audioformat *fp = NULL;
 	int num, protocol, clock = 0;
-	struct uac_format_type_i_continuous_descriptor *fmt;
 	unsigned int chconfig;
 
 	dev = chip->dev;
@@ -498,6 +497,8 @@ int snd_usb_parse_audio_interface(struct snd_usb_audio *chip, int iface_no)
 		num = 4;
 
 	for (i = 0; i < num; i++) {
+		struct uac_format_type_i_continuous_descriptor *fmt = NULL;
+
 		alts = &iface->altsetting[i];
 		altsd = get_iface_desc(alts);
 		protocol = altsd->bInterfaceProtocol;
@@ -732,4 +733,3 @@ int snd_usb_parse_audio_interface(struct snd_usb_audio *chip, int iface_no)
 	}
 	return 0;
 }
-
