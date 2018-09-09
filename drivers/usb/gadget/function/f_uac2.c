@@ -1449,14 +1449,14 @@ static struct usb_descriptor_header *ss_audio_desc[] = {
 };
 
 struct cntrl_cur_lay3 {
-	__u32	dCUR;
+	__le32	dCUR;
 };
 
 struct cntrl_range_lay3 {
-	__u16	wNumSubRanges;
-	__u32	dMIN;
-	__u32	dMAX;
-	__u32	dRES;
+	__le16	wNumSubRanges;
+	__le32	dMIN;
+	__le32	dMAX;
+	__le32	dRES;
 } __packed;
 
 #define _CNTRL_RANGE_LAY3(n)	cntrl_range_lay3_##n
@@ -1470,8 +1470,8 @@ struct cntrl_range_lay3 {
  */
 #define DECLARE_CNTRL_RANGE_LAY3(n)				\
 struct CNTRL_RANGE_LAY3(n) {					\
-	__u16	wNumSubRanges;					\
-	__u32	dRangeAttrs[n][3];				\
+	__le16	wNumSubRanges;					\
+	__le32	dRangeAttrs[n][3];				\
 } __packed
 
 DECLARE_CNTRL_RANGE_LAY3(CLK_FREQ_ARR_SIZE);
@@ -1949,9 +1949,9 @@ in_rq_cur(struct usb_function *fn, const struct usb_ctrlrequest *cr)
 		struct cntrl_cur_lay3 c;
 
 		if (entity_id == USB_IN_CLK_ID)
-			c.dCUR = p_srate;
+			c.dCUR = cpu_to_le32(p_srate);
 		else if (entity_id == USB_OUT_CLK_ID)
-			c.dCUR = c_srate;
+			c.dCUR = cpu_to_le32(c_srate);
 
 		value = min_t(unsigned, w_length, sizeof c);
 		memcpy(req->buf, &c, value);
@@ -1992,11 +1992,11 @@ in_rq_range(struct usb_function *fn, const struct usb_ctrlrequest *cr)
 		if (entity_id == USB_IN_CLK_ID || USB_OUT_CLK_ID) {
 			int i;
 
-			r.wNumSubRanges = CLK_FREQ_ARR_SIZE;
+			r.wNumSubRanges = cpu_to_le16(CLK_FREQ_ARR_SIZE);
 			for (i = 0; i < CLK_FREQ_ARR_SIZE; i++) {
-				r.dRangeAttrs[i][0] = clk_frequencies[i];
-				r.dRangeAttrs[i][1] = r.dRangeAttrs[i][0];
-				r.dRangeAttrs[i][2] = 0;
+				r.dRangeAttrs[i][0] = cpu_to_le32(clk_frequencies[i]);
+				r.dRangeAttrs[i][1] = cpu_to_le32(r.dRangeAttrs[i][0]);
+				r.dRangeAttrs[i][2] = cpu_to_le32(0);
 			}
 			value = min_t(unsigned, w_length, sizeof(r));
 			memcpy(req->buf, &r, value);
