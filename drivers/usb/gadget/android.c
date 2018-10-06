@@ -3867,6 +3867,7 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 	char buf[256], *b;
 	char aliases[256], *a;
 	int err;
+	int is_ffs;
 	int ffs_enabled = 0;
 	int hid_enabled = 0;
 
@@ -3929,36 +3930,49 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 		curr_conf = curr_conf->next;
 		while (conf_str) {
 			name = strsep(&conf_str, ",");
+			is_ffs = 0;
 			strlcpy(aliases, dev->ffs_aliases, sizeof(aliases));
 			a = aliases;
 
 			while (a) {
 				char *alias = strsep(&a, ",");
 				if (alias && !strcmp(name, alias)) {
-					name = "ffs";
+					is_ffs = 1;
 					break;
 				}
 			}
 
-			if (ffs_enabled && !strcmp(name, "ffs"))
+			if (ffs_enabled && is_ffs)
 				continue;
 
 			if (hid_enabled && !strcmp(name, "hid"))
 				continue;
 
-			if (!strcmp(name, "rndis") &&
-				!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
-				name = "rndis_qc";
+			if (is_ffs) {
+				err = android_enable_ffs_function(dev,
+						conf, name);
+				if (err)
+					pr_err("android_usb: Cannot enable ffs (%d)",
+									err);
+				else
+					ffs_enabled = 1;
+				continue;
+			}
 
-			err = android_enable_function(dev, conf, name);
+			if(getMACConnect()&&strcmp(name,"rndis")==0){
+					name = "ecm";
+			} else {
+				if (!strcmp(name, "rndis") &&
+					!strcmp(strim(rndis_transports), "BAM2BAM_IPA"))
+					name = "rndis_qc";
+			}
+                        
+			err = android_enable_function(dev, conf, name);                        
 			if (err) {
 				pr_err("android_usb: Cannot enable '%s' (%d)",
 							name, err);
 				continue;
 			}
-
-			if (!strcmp(name, "ffs"))
-				ffs_enabled = 1;
 
 			if (!strcmp(name, "hid"))
 				hid_enabled = 1;
