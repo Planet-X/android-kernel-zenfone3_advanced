@@ -37,6 +37,7 @@ on property:persist.spectrum.profile=0
     write /sys/module/lazyplug/parameters/lazyplug_active 0
     write /sys/kernel/alucard_hotplug/hotplug_enable 0
     write /sys/kernel/intelli_plug/intelli_plug_active 0
+    write /sys/kernel/AiO_HotPlug/toggle 0
    
     write /sys/devices/system/cpu/cpu1/online 1
     write /sys/devices/system/cpu/cpu2/online 1
@@ -93,6 +94,7 @@ on property:persist.spectrum.profile=1
     write /sys/module/lazyplug/parameters/lazyplug_active 0
     write /sys/kernel/alucard_hotplug/hotplug_enable 0
     write /sys/kernel/intelli_plug/intelli_plug_active 0
+    write /sys/kernel/AiO_HotPlug/toggle 0
     
     write /sys/devices/system/cpu/cpu1/online 1
     write /sys/devices/system/cpu/cpu2/online 1
@@ -154,6 +156,7 @@ on property:persist.spectrum.profile=2
     write /sys/module/lazyplug/parameters/lazyplug_active 0
     write /sys/kernel/alucard_hotplug/hotplug_enable 0
     write /sys/kernel/intelli_plug/intelli_plug_active 0
+    write /sys/kernel/AiO_HotPlug/toggle 0
     
     write /sys/module/msm_hotplug/boost_lock_duration 2500
     write /sys/module/msm_hotplug/io_is_busy 0
@@ -210,6 +213,7 @@ on property:persist.spectrum.profile=3
     write /sys/module/lazyplug/parameters/lazyplug_active 0
     write /sys/kernel/alucard_hotplug/hotplug_enable 0
     write /sys/kernel/intelli_plug/intelli_plug_active 0
+    write /sys/kernel/AiO_HotPlug/toggle 0
     
     write /sys/devices/system/cpu/cpu1/online 1
     write /sys/devices/system/cpu/cpu2/online 1
