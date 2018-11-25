@@ -11,7 +11,9 @@
  *
  */
 
-// Assume Quad-Core SoCs to be of Traditional Configuration and Hexa/Octa-Core SoCs to be of big.LITTLE Configuration.
+// (Assume Quad-Core SoCs to be of Traditional Configuration and Hexa/Octa-Core SoCs to be of big.LITTLE Configuration.)
+// Planet-X <planetx.dev@gmail.com>: Adapted for the msm8953 which is an Octa-Core SoC but does not have a big.LITTLE Configuration.
+// This version supports an unlimited core count but does not support big.LITTLE anymore.
 
 #include <linux/cpu.h>
 #include <linux/module.h>
@@ -21,33 +23,12 @@
 #define AIO_HOTPLUG			"AiO_HotPlug"
 #define AIO_TOGGLE			0
 
-#if (NR_CPUS == 4)
-    #define DEFAULT_CORES		4
-#elif (NR_CPUS == 6)
-      #define DEFAULT_BIG_CORES		2
-      #define DEFAULT_LITTLE_CORES	4
-#elif (NR_CPUS == 8)
-      #define DEFAULT_BIG_CORES		4
-      #define DEFAULT_LITTLE_CORES	4
-#endif
-
-
 static struct AiO_HotPlug {
        unsigned int toggle;
-       #if (NR_CPUS == 4)
        unsigned int cores;
-       #elif (NR_CPUS == 6 || NR_CPUS == 8)
-       unsigned int big_cores;
-       unsigned int LITTLE_cores;
-       #endif
 } AiO = {
 	.toggle 	 = AIO_TOGGLE,
-	#if (NR_CPUS == 4)
-	.cores		 = DEFAULT_CORES,
-	#elif (NR_CPUS == 6 || NR_CPUS == 8)
-	.big_cores	 = DEFAULT_BIG_CORES,
-	.LITTLE_cores    = DEFAULT_LITTLE_CORES,
-	#endif
+	.cores		 = NR_CPUS,
 };
 
 static struct delayed_work AiO_work;
@@ -57,168 +38,18 @@ int AiO_HotPlug;
 
 static void __ref AiO_HotPlug_work(struct work_struct *work)
 {
-         // Operations for a Traditional Quad-Core SoC.
-         #if (NR_CPUS == 4)
-	     if (AiO.cores == 1)
-	     {	   
-	        if (cpu_online(3))
-	           cpu_down(3);
-	        if (cpu_online(2))
-	           cpu_down(2);
-	        if (cpu_online(1)) 
-                   cpu_down(1);
-	     }
-	     else if (AiO.cores == 2)
-	     {
-	   	     if (!cpu_online(1))
-	      	        cpu_up(1);
-	   
-	   	     if (cpu_online(3))
-	                cpu_down(3);
-	   	     if (cpu_online(2))
-	                cpu_down(2);
-	     }
-	     else if (AiO.cores == 3)
-	     {
-	   	     if (!cpu_online(1))
-	      	        cpu_up(1);
-	   	     if (!cpu_online(2))
-	      	        cpu_up(2);
-	   
-	   	     if (cpu_online(3))
-	      	        cpu_down(3);
-	     }
-	     else if (AiO.cores == 4)
-	     {
-	           if (!cpu_online(1))
-	      	      cpu_up(1);
-	           if (!cpu_online(2))
-	      	      cpu_up(2);
-	           if (!cpu_online(3))
-	      	      cpu_up(3);
-	     }
-	  // Operations for a big.LITTLE SoC.
-	  #elif (NR_CPUS == 6 || NR_CPUS == 8)
-	        // Operations for big Cluster.
-                if (AiO.big_cores == 0)
-	        {
-	           if (cpu_online(3))
-	              cpu_down(3);
-	   	   if (cpu_online(2))
-	      	      cpu_down(2);
-	   	   if (cpu_online(1)) 
-              	      cpu_down(1);
-	   	   if (cpu_online(0))
-	      	      cpu_down(0);
-	        }
-	        else if (AiO.big_cores == 1)
-	        {
-	                if (!cpu_online(0))
-	                   cpu_up(0);
-	   
-	                if (cpu_online(3))
-	          	   cpu_down(3);
-	      	        if (cpu_online(2))
-	           	   cpu_down(2);
-	        	if (cpu_online(1)) 
-                   	   cpu_down(1);
+	int core;
+	
+	// Operations for a Traditional Quad-Core SoC.
+	for(core = 1; core < NR_CPUS; core++) {
+		if (core < AiO.cores) {
+			if(!cpu_online(core))
+				cpu_up(core);
+		} else {
+			if (cpu_online(core))
+				cpu_down(core);
 		}
-		else if (AiO.big_cores == 2)
-		{
-	        	if (!cpu_online(0))
-	           	   cpu_up(0);
-	   		if (!cpu_online(1))
-	      	   	   cpu_up(1);
-	   
-	   		if (cpu_online(3))
-	           	   cpu_down(3);
-	   		if (cpu_online(2))
-	           	   cpu_down(2);
-		}
-		else if (AiO.big_cores == 3)
-		{
-	   		if (!cpu_online(0))
-	           	   cpu_up(0);
-	   		if (!cpu_online(1))
-	      	   	   cpu_up(1);
-	   		if (!cpu_online(2))
-	      	   	   cpu_up(2);
-	   
-	   		if (cpu_online(3))
-	      	   	   cpu_down(3);
-		}
-		else if (AiO.big_cores == 4)
-		{
-	   		if (!cpu_online(0))
-	      	   	   cpu_up(0);
-	   		if (!cpu_online(1))
-	      	   	   cpu_up(1);
-	   		if (!cpu_online(2))
-	      	   	   cpu_up(2);
-	   		if (!cpu_online(3))
-	      	   	   cpu_up(3);
-		}
-		// Operations for LITTLE Cluster.
-		if (AiO.LITTLE_cores == 0)
-		{
-	   	   if (cpu_online(7))
-	      	      cpu_down(7);
-	   	   if (cpu_online(6))
-	      	      cpu_down(6);
-	  	   if (cpu_online(5)) 
-             	      cpu_down(5);
-	   	   if (cpu_online(4))
-	      	      cpu_down(4);
-		}
-		else if (AiO.LITTLE_cores == 1)
-		{
-	   		if (!cpu_online(4))
-	      	   	   cpu_up(4);
-	   
-	   		if (cpu_online(7))
-	      	   	   cpu_down(7);
-	   		if (cpu_online(6))
-	      	   	   cpu_down(6);
-	   		if (cpu_online(5)) 
-              	   	   cpu_down(5);
-		}
-		else if (AiO.LITTLE_cores == 2)
-		{
-	   		if (!cpu_online(4))
-	           	   cpu_up(4);
-	   		if (!cpu_online(5))
-	           	   cpu_up(5);
-	   
-	   		if (cpu_online(7))
-	      	   	   cpu_down(7);
-	   		if (cpu_online(6))
-	                   cpu_down(6);
-		}
-		else if (AiO.LITTLE_cores == 3)
-		{
-	   		if (!cpu_online(4))
-	      	   	   cpu_up(4);
-	   		if (!cpu_online(5))
-	      	   	   cpu_up(5);
-	   		if (!cpu_online(6))
-	      	   	   cpu_up(6);
-	   
-	   		if (cpu_online(7))
-	      	  	   cpu_down(7);
-		}
-		else if (AiO.LITTLE_cores == 4)
-		{
-	  		if (!cpu_online(4))
-	           	   cpu_up(4);
-	   		if (!cpu_online(5))
-	           	   cpu_up(5);
-	   		if (!cpu_online(6))
-	           	   cpu_up(6);
-	   		if (!cpu_online(7))
-	           	   cpu_up(7);
-                }
-          #endif
-
+	}
 	queue_delayed_work(AiO_wq, &AiO_work, msecs_to_jiffies(1000));
 }
 
@@ -270,7 +101,6 @@ static ssize_t show_toggle(struct kobject *kobj,
 {
 	return sprintf(buf, "%u\n", AiO.toggle);
 }
-
 static ssize_t store_toggle(struct kobject *kobj,
 			     struct kobj_attribute *attr,
 			     const char *buf, size_t count)
@@ -302,7 +132,6 @@ static ssize_t store_toggle(struct kobject *kobj,
 	return count;
 }
 
-#if (NR_CPUS == 4)
 static ssize_t show_cores(struct kobject *kobj,
 			  struct kobj_attribute *attr, 
 			  char *buf)
@@ -318,70 +147,13 @@ static ssize_t store_cores(struct kobject *kobj,
 
 	ret = sscanf(buf, "%u", &val);
 	
-	if (ret != 1 || val < 1 || val > 4)
+	if (ret != 1 || val < 1 || val > NR_CPUS)
 	   return -EINVAL;
 
 	AiO.cores = val;
 
 	return count;
 }
-#elif (NR_CPUS == 6 || NR_CPUS == 8)
-static ssize_t show_big_cores(struct kobject *kobj,
-			      struct kobj_attribute *attr, 
-			      char *buf)
-{	
-	   return sprintf(buf, "%u\n", AiO.big_cores);
-}
-
-static ssize_t store_big_cores(struct kobject *kobj,
-			       struct kobj_attribute *attr,
-			       const char *buf, size_t count)
-{
-	int ret;
-	unsigned int val;
-
-	ret = sscanf(buf, "%u", &val);
-
-	if (NR_CPUS == 6)
-	{
-	   if (ret != 1 || val < 0 || val > 2 || (val == 0 && AiO.LITTLE_cores == 0))
-	      return -EINVAL;
-	}
-	else if (NR_CPUS == 8)
-	{
-		if (ret != 1 || val < 0 || val > 4 || (val == 0 && AiO.LITTLE_cores == 0))
-	           return -EINVAL;
-	}
-
-	AiO.big_cores = val;
-
-	return count;
-}
-
-static ssize_t show_LITTLE_cores(struct kobject *kobj,
-				 struct kobj_attribute *attr, 
-				 char *buf)
-{
-	   return sprintf(buf, "%u\n", AiO.LITTLE_cores);
-}
-
-static ssize_t store_LITTLE_cores(struct kobject *kobj,
-				  struct kobj_attribute *attr,
-				  const char *buf, size_t count)
-{
-	int ret;
-	unsigned int val;
-
-	ret = sscanf(buf, "%u", &val);
-	
-	if (ret != 1 || val < 0 || val > 4 || (val == 0 && AiO.big_cores == 0))
-	   return -EINVAL;
-
-	AiO.LITTLE_cores = val;
-
-	return count;
-}
-#endif
 
 #define KERNEL_ATTR_RW(_name) 				\
 static struct kobj_attribute _name##_attr = 		\
@@ -392,21 +164,11 @@ static struct kobj_attribute _name##_attr = 		\
        __ATTR(_name, 0444, show_##_name, NULL)
 
 KERNEL_ATTR_RW(toggle);
-#if (NR_CPUS == 4)
-    KERNEL_ATTR_RW(cores);
-#elif (NR_CPUS == 6 || NR_CPUS == 8)
-      KERNEL_ATTR_RW(big_cores);
-      KERNEL_ATTR_RW(LITTLE_cores);
-#endif
+KERNEL_ATTR_RW(cores);
 
 static struct attribute *AiO_HotPlug_attrs[] = {
 	&toggle_attr.attr,
-	#if (NR_CPUS == 4)
-	    &cores_attr.attr,
-	#elif (NR_CPUS == 6 || NR_CPUS == 8)
-	      &big_cores_attr.attr,
-	      &LITTLE_cores_attr.attr,
-	#endif
+	&cores_attr.attr,
 	NULL,
 };
 
@@ -483,5 +245,5 @@ late_initcall(AiO_HotPlug_init);
 module_exit(AiO_HotPlug_exit);
 
 MODULE_AUTHOR("Shoaib Anwar <Shoaib0595@gmail.com>");
-MODULE_DESCRIPTION("AiO HotPlug v2.0, an All in One HotPlug for Traditional Quad-Core SoCs and Hexa-Core and Octa-Core big.LITTLE SoCs.");
+MODULE_DESCRIPTION("AiO HotPlug v2.0, an All in One HotPlug. Adapted by Planet-X for Traditional (non big.LITTLE) SoCs with more than 4 cores.");
 MODULE_LICENSE("GPLv2");
