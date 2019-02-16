@@ -415,7 +415,7 @@ int ST_device_read_range(VL53L0_RangingMeasurementData_t *pRangeData)
 {
 	int8_t status;
 	int i = 0;
-	uint8_t intStatus;
+	uint8_t intStatus = 0;
 	int16_t RawRange;
 
 	timer = get_current_time();

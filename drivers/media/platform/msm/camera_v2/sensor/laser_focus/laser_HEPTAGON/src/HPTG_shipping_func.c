@@ -417,7 +417,7 @@ int	Read_Range_Data(struct msm_laser_focus_ctrl_t *dev_t){
 	
 	uint16_t RawRange = 0, Range = 0, error_status =0;
 	uint16_t RawConfidence = 0, confidence_level =0;
-	int status;
+	int status = 0;
 	int errcode;
 	int confirm=0;
 	
@@ -548,7 +548,7 @@ int	Read_Range_Data_OldKdata(struct msm_laser_focus_ctrl_t *dev_t){
 	
 	uint16_t RawRange = 0, Range = 0, error_status =0;
 	uint16_t RawConfidence = 0, confidence_level =0;
-	int status;
+	int status = 0;
 	int errcode;
 	int confirm=0;
 	
@@ -780,7 +780,7 @@ read_err:
 *
 */
 int MCPU_Controller(struct msm_laser_focus_ctrl_t *dev_t, int mode){
-	int status;
+	int status = 0;
 
 	LOG_Handler(LOG_DBG, "%s: procdure (%d)\n", __func__, mode);
 	switch(mode){

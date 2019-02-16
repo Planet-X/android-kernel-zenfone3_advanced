@@ -1726,7 +1726,7 @@ static void msm8x16_wcd_dt_parse_micbias_info(struct device *dev,
 static struct msm8x16_wcd_pdata *msm8x16_wcd_populate_dt_pdata(
 						struct device *dev)
 {
-	struct msm8x16_wcd_pdata *pdata;
+	struct msm8x16_wcd_pdata *pdata = NULL;
 	int ret, static_cnt, ond_cnt, idx, i;
 	const char *name = NULL;
 	const char *static_prop_name = "qcom,cdc-static-supplies";
@@ -3667,7 +3667,7 @@ static int msm8x16_wcd_codec_set_iir_gain(struct snd_soc_dapm_widget *w,
 		struct snd_kcontrol *kcontrol, int event)
 {
 	struct snd_soc_codec *codec = w->codec;
-	int value = 0, reg;
+	int value = 0, reg = 0;
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
@@ -5876,7 +5876,7 @@ static int msm8x16_wcd_codec_probe(struct snd_soc_codec *codec)
 {
 	struct msm8x16_wcd_priv *msm8x16_wcd_priv;
 	struct msm8x16_wcd *msm8x16_wcd;
-	struct msm8x16_wcd_pdata *pdata;
+	struct msm8x16_wcd_pdata *pdata = NULL;
 	int i, ret;
 	const char *subsys_name = NULL;
 
@@ -6309,7 +6309,7 @@ static int msm8x16_wcd_spmi_probe(struct spmi_device *spmi)
 {
 	int ret = 0;
 	struct msm8x16_wcd *msm8x16 = NULL;
-	struct msm8x16_wcd_pdata *pdata;
+	struct msm8x16_wcd_pdata *pdata = NULL;
 	struct resource *wcd_resource;
 	int adsp_state;
 	static int spmi_dev_registered_cnt;

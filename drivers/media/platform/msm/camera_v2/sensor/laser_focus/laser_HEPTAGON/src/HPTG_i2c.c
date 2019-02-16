@@ -37,7 +37,7 @@ int Laura_device_indirect_addr_read(struct msm_laser_focus_ctrl_t *dev_t, uint16
 int Laura_device_indirect_addr_write(struct msm_laser_focus_ctrl_t *dev_t,
 										uint16_t i_reg_addr_lsb, uint16_t i_reg_addr_msb, uint16_t indirect_addr, 
 										uint32_t register_addr, uint16_t *i2c_write_data, uint32_t num_word){
-	int status;
+	int status = 0;
 	/* Setting i2c client */
 	struct msm_camera_i2c_client *sensor_i2c_client;
 

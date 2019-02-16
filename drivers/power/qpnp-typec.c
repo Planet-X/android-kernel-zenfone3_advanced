@@ -137,7 +137,7 @@ static char *mode_text[] = {
 static int __qpnp_typec_read(struct spmi_device *spmi, u8 *val, u16 addr,
 			int count)
 {
-	int rc;
+	int rc = 0;
 
 	rc = spmi_ext_register_readl(spmi->ctrl, spmi->sid, addr, val, count);
 	if (rc)
@@ -150,7 +150,7 @@ static int __qpnp_typec_read(struct spmi_device *spmi, u8 *val, u16 addr,
 static int __qpnp_typec_write(struct spmi_device *spmi, u8 *val, u16 addr,
 			int count)
 {
-	int rc;
+	int rc = 0;
 
 	rc = spmi_ext_register_writel(spmi->ctrl, spmi->sid, addr, val, count);
 	if (rc)
@@ -162,7 +162,7 @@ static int __qpnp_typec_write(struct spmi_device *spmi, u8 *val, u16 addr,
 static int qpnp_typec_read(struct qpnp_typec_chip *chip, u8 *val, u16 addr,
 			int count)
 {
-	int rc;
+	int rc = 0;
 	unsigned long flags;
 	struct spmi_device *spmi = chip->spmi;
 
@@ -183,7 +183,7 @@ static int qpnp_typec_masked_write(struct qpnp_typec_chip *chip, u16 base,
 			u8 mask, u8 val)
 {
 	u8 reg;
-	int rc;
+	int rc = 0;
 	unsigned long flags;
 	struct spmi_device *spmi = chip->spmi;
 
@@ -343,7 +343,7 @@ static int qpnp_typec_force_mode(struct qpnp_typec_chip *chip, int mode)
 
 static int qpnp_typec_handle_usb_insertion(struct qpnp_typec_chip *chip, u8 reg)
 {
-	int rc;
+	int rc = 0;
 	enum cc_line_state cc_line_state;
 
 	cc_line_state = (reg & TYPEC_CCOUT_OPEN_BIT) ?
@@ -364,7 +364,7 @@ static int qpnp_typec_handle_usb_insertion(struct qpnp_typec_chip *chip, u8 reg)
 
 static int qpnp_typec_handle_detach(struct qpnp_typec_chip *chip)
 {
-	int rc;
+	int rc = 0;
 
 	rc = qpnp_typec_configure_ssmux(chip, OPEN);
 	if (rc) {
@@ -443,7 +443,7 @@ static irqreturn_t vconn_oc_handler(int irq, void *_chip)
 
 static irqreturn_t ufp_detect_handler(int irq, void *_chip)
 {
-	int rc;
+	int rc = 0;
 	u8 reg;
 	struct qpnp_typec_chip *chip = _chip;
 
@@ -483,7 +483,7 @@ out:
 
 static irqreturn_t ufp_detach_handler(int irq, void *_chip)
 {
-	int rc;
+	int rc = 0;
 	struct qpnp_typec_chip *chip = _chip;
 
 	pr_debug("ufp detach triggered\n");
@@ -500,7 +500,7 @@ static irqreturn_t ufp_detach_handler(int irq, void *_chip)
 
 static irqreturn_t dfp_detect_handler(int irq, void *_chip)
 {
-	int rc;
+	int rc = 0;
 	u8 reg[2];
 	struct qpnp_typec_chip *chip = _chip;
 
@@ -543,7 +543,7 @@ out:
 
 static irqreturn_t dfp_detach_handler(int irq, void *_chip)
 {
-	int rc;
+	int rc = 0;
 	struct qpnp_typec_chip *chip = _chip;
 
 	pr_debug("dfp detach triggered\n");
@@ -560,7 +560,7 @@ static irqreturn_t dfp_detach_handler(int irq, void *_chip)
 
 static irqreturn_t vbus_err_handler(int irq, void *_chip)
 {
-	int rc;
+	int rc = 0;
 	struct qpnp_typec_chip *chip = _chip;
 
 	pr_debug("vbus_err triggered\n");
@@ -577,7 +577,7 @@ static irqreturn_t vbus_err_handler(int irq, void *_chip)
 
 static int qpnp_typec_parse_dt(struct qpnp_typec_chip *chip)
 {
-	int rc;
+	int rc = 0;
 	struct device_node *node = chip->dev->of_node;
 
 	/* SS-Mux configuration gpio */
@@ -613,7 +613,7 @@ static int qpnp_typec_parse_dt(struct qpnp_typec_chip *chip)
 
 static int qpnp_typec_determine_initial_status(struct qpnp_typec_chip *chip)
 {
-	int rc;
+	int rc = 0;
 	u8 rt_reg;
 
 	rc = qpnp_typec_read(chip, &rt_reg, INT_RT_STS_REG(chip->base), 1);
@@ -712,7 +712,7 @@ static void qpnp_typec_role_check_work(struct work_struct *work)
 	struct delayed_work *dwork = to_delayed_work(work);
 	struct qpnp_typec_chip *chip = container_of(dwork,
 				struct qpnp_typec_chip, role_reversal_check);
-	int rc;
+	int rc = 0;
 
 	mutex_lock(&chip->typec_lock);
 	switch (chip->force_mode) {
@@ -756,7 +756,7 @@ enum dual_role_property qpnp_typec_dr_properties[] = {
 static int qpnp_typec_dr_is_writeable(struct dual_role_phy_instance *dual_role,
 					enum dual_role_property prop)
 {
-	int rc;
+	int rc = 0;
 
 	switch (prop) {
 	case DUAL_ROLE_PROP_MODE:
@@ -879,7 +879,7 @@ static int qpnp_typec_dr_get_property(struct dual_role_phy_instance *dual_role,
 int typec_CHG_TYPE_current(void)
 {	
 	int CHG_TYPE_current;
-	int rc;
+	int rc = 0;
 	u8 reg;
 
 	rc = qpnp_typec_read(typec_dev, &reg, TYPEC_UFP_STATUS_REG(typec_dev->base), 1);
@@ -929,7 +929,7 @@ void static create_TypeC_Side_Detect_proc_file(void)
 
 static int qpnp_typec_probe(struct spmi_device *spmi)
 {
-	int rc;
+	int rc = 0;
 	struct resource *resource;
 	struct qpnp_typec_chip *chip;
 
@@ -1039,7 +1039,7 @@ out:
 
 static int qpnp_typec_remove(struct spmi_device *spmi)
 {
-	int rc;
+	int rc = 0;
 	struct qpnp_typec_chip *chip = dev_get_drvdata(&spmi->dev);
 
 	if (chip->role_reversal_supported) {

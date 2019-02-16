@@ -1020,7 +1020,7 @@ static ssize_t
 mtemp_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
         struct thermal_zone_device *tz = to_thermal_zone(dev);
-        long mtemperature;
+        long mtemperature = 0;
         int ret;
 
         ret = thermal_zone_get_temp(tz, &mtemperature);

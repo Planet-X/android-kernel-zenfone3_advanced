@@ -5904,7 +5904,7 @@ void thermal_level_control(struct smbchg_chip *chip)
 {
 	int cap;
 	bool thermal_suspend_charging;
-	u8 ICL;
+	u8 ICL = 0;
 	int rc;
 	int latest_temp;
 	int latest_level;
