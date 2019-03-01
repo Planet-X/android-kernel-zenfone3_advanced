@@ -211,6 +211,12 @@
 #define __visible	__attribute__((externally_visible))
 #endif
 
+#if GCC_VERSION >= 90000
+# define __copy(symbol)                 __attribute__((__copy__(symbol)))
+#else
+# define __copy(symbol)
+#endif
+
 /*
  * GCC 'asm goto' miscompiles certain code sequences:
  *
