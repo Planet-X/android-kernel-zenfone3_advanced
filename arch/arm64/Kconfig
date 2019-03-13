@@ -314,6 +314,16 @@ config ARCH_MSM8940
 	  This enables support for the MSM8940 chipset. If you don't
 	  know what to do here, say N
 
+config ARCH_MSM8953_ASUS_ZENFONE3
+	bool "Enable Support for the Asus Zenfone 3"
+	depends on ARCH_MSM8953
+	default n
+
+config ARCH_MSM8953_ASUS_ZENFONE3_TREBLE
+	bool "Enable Support for the Asus Zenfone 3, treblized"
+	depends on ARCH_MSM8953_ASUS_ZENFONE3
+	default n
+
 config ARCH_MSM8953
 	bool "Enable Support for Qualcomm Technologies Inc MSM8953"
 	depends on ARCH_MSM
