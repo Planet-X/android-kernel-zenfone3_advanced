@@ -316,8 +316,8 @@ static int sde_mdp_wb_wait4comp(struct sde_mdp_ctl *ctl, void *arg)
 {
 	struct sde_mdp_writeback_ctx *ctx;
 	int rc = 0;
-	u64 rot_time;
-	u32 status, mask, isr;
+	u64 rot_time = 0;
+	u32 status = 0, mask = 0, isr = 0;
 
 	ctx = (struct sde_mdp_writeback_ctx *) ctl->priv_data;
 	if (!ctx) {
