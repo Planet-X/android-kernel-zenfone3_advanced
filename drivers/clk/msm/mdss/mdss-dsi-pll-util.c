@@ -350,6 +350,17 @@ static void pll_28nm_ssc_param_calc(struct dsi_pll_vco_clk *vco,
 	s32 rem;
 
 	if (!dsi_pll_res->ssc_en) {
+		vco_calc->ssc.kdiv = 0;
+		vco_calc->ssc.triang_steps = 0;
+
+		vco_calc->ssc.triang_inc_7_0 = 0;
+		vco_calc->ssc.triang_inc_9_8 = 0;
+
+		vco_calc->ssc.dc_offset = 0;
+		
+		vco_calc->ssc.freq_seed_7_0 = 0;
+		vco_calc->ssc.freq_seed_15_8 = 0;
+
 		pr_debug("DSI PLL SSC not enabled\n");
 		return;
 	}
