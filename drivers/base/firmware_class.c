@@ -359,6 +359,12 @@ fail:
 	return rc;
 }
 
+#ifdef CONFIG_ARCH_MSM8953_ASUS_ZENFONE3_TREBLE
+#define ASUS_FW_LOADING_PATH "/vendor/firmware"
+#else
+#define ASUS_FW_LOADING_PATH "/system/vendor/firmware"
+#endif
+
 static int fw_get_filesystem_firmware(struct device *device,
 				      struct firmware_buf *buf,
 				      phys_addr_t dest_addr, size_t dest_size)
@@ -390,7 +396,7 @@ static int fw_get_filesystem_firmware(struct device *device,
 		/* ASUS BSP : For Change Venus FW loading path to system/vendor/firmware */
 		snprintf(v_name, 6, "%s", buf->fw_id);
 		if (!strcmp(v_name, "venus")  && i == 1 ) {
-				snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", buf->fw_id);
+				snprintf(path, PATH_MAX, "%s/%s", ASUS_FW_LOADING_PATH, buf->fw_id);
 				dev_err(device, "[Venus] Try to load firmware : %s \n", path);
 		}
 		/* ASUS BSP ---*/
@@ -398,7 +404,7 @@ static int fw_get_filesystem_firmware(struct device *device,
 		/* ASUS BSP : For Change ADSP FW loading path to system/vendor/firmware */
 		snprintf(fw_name, 5, "%s", buf->fw_id);
 		if (!strcmp(fw_name, "adsp")  && i == 1 ) {
-			snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", buf->fw_id);
+			snprintf(path, PATH_MAX, "%s/%s", ASUS_FW_LOADING_PATH, buf->fw_id);
 			dev_err(device, "[ADSP] Try to load firmware : %s \n", path);
 		}
 		/* ASUS BSP ---*/
