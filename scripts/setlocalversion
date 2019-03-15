@@ -171,6 +171,11 @@ fi
 # CONFIG_LOCALVERSION and LOCALVERSION (if set)
 res="${res}${CONFIG_LOCALVERSION}${LOCALVERSION}"
 
+# Append treble suffix to the kernel version string, if treble support is enabled.
+if test "$CONFIG_ARCH_MSM8953_ASUS_ZENFONE3_TREBLE" = "y"; then
+         res="$res-TR"
+fi
+
 # Append overclocking suffix to the kernel version string, if enabled.
 if test "$CONFIG_CPU_FREQ_MSM_OVERCLOCK_MSM8953" = "y"; then
          res="$res-OC"
