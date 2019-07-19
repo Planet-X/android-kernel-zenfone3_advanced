@@ -412,7 +412,10 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
 		check_object_size(to, n, false);
 		n = __arch_copy_from_user(to, from, n);
 	} else /* security hole - plug it */
+		__diag_push();
+		__diag_ignore(GCC_8, "-Warray-bounds");
 		memset(to, 0, n);
+		__diag_pop();
 	return n;
 }
 
