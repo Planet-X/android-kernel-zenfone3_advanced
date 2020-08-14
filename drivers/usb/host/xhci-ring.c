@@ -1267,57 +1267,6 @@ void xhci_cleanup_command_queue(struct xhci_hcd *xhci)
 		xhci_complete_del_and_free_cmd(cur_cmd, COMP_CMD_ABORT);
 }
 
-/*
- * Turn all commands on command ring with status set to "aborted" to no-op trbs.
- * If there are other commands waiting then restart the ring and kick the timer.
- * This must be called with command ring stopped and xhci->lock held.
- */
-static void xhci_handle_stopped_cmd_ring(struct xhci_hcd *xhci,
-					 struct xhci_command *cur_cmd)
-{
-	struct xhci_command *i_cmd, *tmp_cmd;
-	u32 cycle_state;
-
-	/* Turn all aborted commands in list to no-ops, then restart */
-	list_for_each_entry_safe(i_cmd, tmp_cmd, &xhci->cmd_list,
-				 cmd_list) {
-
-		if (i_cmd->status != COMP_CMD_ABORT)
-			continue;
-
-		i_cmd->status = COMP_CMD_STOP;
-
-		xhci_dbg(xhci, "Turn aborted command %pK to no-op\n",
-			 i_cmd->command_trb);
-		/* get cycle state from the original cmd trb */
-		cycle_state = le32_to_cpu(
-			i_cmd->command_trb->generic.field[3]) &	TRB_CYCLE;
-		/* modify the command trb to no-op command */
-		i_cmd->command_trb->generic.field[0] = 0;
-		i_cmd->command_trb->generic.field[1] = 0;
-		i_cmd->command_trb->generic.field[2] = 0;
-		i_cmd->command_trb->generic.field[3] = cpu_to_le32(
-			TRB_TYPE(TRB_CMD_NOOP) | cycle_state);
-
-		/*
-		 * caller waiting for completion is called when command
-		 *  completion event is received for these no-op commands
-		 */
-	}
-
-	xhci->cmd_ring_state = CMD_RING_STATE_RUNNING;
-
-	/* ring command ring doorbell to restart the command ring */
-	if ((xhci->cmd_ring->dequeue != xhci->cmd_ring->enqueue) &&
-	    !(xhci->xhc_state & XHCI_STATE_DYING)) {
-		xhci->current_cmd = cur_cmd;
-		mod_timer(&xhci->cmd_timer, jiffies + XHCI_CMD_DEFAULT_TIMEOUT);
-		xhci_ring_cmd_db(xhci);
-	}
-	return;
-}
-
-
 void xhci_handle_command_timeout(struct work_struct *work)
 {
 	struct xhci_hcd *xhci;

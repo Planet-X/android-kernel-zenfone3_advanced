@@ -1178,9 +1178,10 @@ static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 
 		if (zlp_required) {
 			zlp_required = false;
-			ret = dwc3_ep0_start_trans(dwc, epnum,
+			dwc3_ep0_prepare_one_trb(dwc, epnum,
 					dwc->ctrl_req_addr, 0,
 					DWC3_TRBCTL_CONTROL_DATA);
+			ret = dwc3_ep0_start_trans(dwc, epnum);
 			dbg_event(epnum, "ZLP", ret);
 			if (ret)
 				dev_dbg(dwc->dev, "%s: start xfer cmd failed",
