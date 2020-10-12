@@ -232,6 +232,9 @@ static struct tcp_metrics_block *__tcp_get_metrics_req(struct request_sock *req,
 	unsigned int hash;
 	struct net *net;
 
+	memset(&saddr, 0, sizeof(saddr));
+	memset(&daddr, 0, sizeof(daddr));
+
 	saddr.family = req->rsk_ops->family;
 	daddr.family = req->rsk_ops->family;
 	switch (daddr.family) {
@@ -975,6 +978,9 @@ static int tcp_metrics_nl_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	void *reply;
 	int ret;
 	bool src = true;
+
+	memset(&saddr, 0, sizeof(saddr));
+	memset(&daddr, 0, sizeof(daddr));
 
 	ret = parse_nl_addr(info, &daddr, &hash, 0);
 	if (ret < 0)
