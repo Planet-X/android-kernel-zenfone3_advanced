@@ -646,7 +646,7 @@ struct fg_chip {
 	bool			*batt_range_ocv;
 	int			*batt_range_pct;
 };
-//[+++]Set a global chip 
+//[+++]Set a global chip
 static struct fg_chip *the_chip;
 #define REPORT_CAPACITY_POLLING_TIME 180
 //[---]Set a global chip
@@ -2435,7 +2435,7 @@ static int init_asus_capacity(void)
 	if (fp->f_op != NULL && fp->f_op->read != NULL) {
 		pos_lsts = 0;
 		readlen = fp->f_op->read(fp, buf, 6, &pos_lsts);
-		buf[readlen] = '\0';		
+		buf[readlen] = '\0';
 	} else {
 		BAT_DBG_E("%s: f_op=NULL or op->read=NULL\n", __func__);
 		return -ENXIO;	/*No such device or address*/
@@ -2450,7 +2450,7 @@ static int init_asus_capacity(void)
 	} else {
 		BAT_DBG("%s: %d\n", __func__, l_result);
 	}
-	
+
 	return l_result;
 }
 void backup_asus_capacity(int input)
@@ -2461,7 +2461,7 @@ void backup_asus_capacity(int input)
 	char buf[8] = "";
 
 	sprintf(buf, "%d", input);
-	
+
 	fp = filp_open(BATTERY_BACKUP_FILE, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (IS_ERR_OR_NULL(fp)) {
 		BAT_DBG_E("%s: open (%s) fail\n", __func__, BATTERY_BACKUP_FILE);
@@ -2474,7 +2474,7 @@ void backup_asus_capacity(int input)
 
 	if (fp->f_op != NULL && fp->f_op->write != NULL) {
 		pos_lsts = 0;
-		fp->f_op->write(fp, buf, strlen(buf), &fp->f_pos);				
+		fp->f_op->write(fp, buf, strlen(buf), &fp->f_pos);
 	} else {
 		BAT_DBG_E("%s: f_op=NULL or op->write=NULL\n", __func__);
 		return;
@@ -2516,7 +2516,7 @@ static int judge_discharging_parameter(int raw_soc, int last_shift)
 static int calculate_charging_capacity(int raw_soc, int last_rawSoc, int last_shift, int soc_check)
 {
 	int l_result = last_shift;
-	
+
 	/*BSP david: if previous capacity reach full or current raw capacity meet full condition, report full*/
 	if (last_rawSoc + last_shift >= MAX_ASUS_CAPACITY || raw_soc > ASUS_MAPPING_CHARGING_TARGET_CAPACITY) {
 		l_result = MAX_ASUS_CAPACITY - raw_soc;
@@ -2606,7 +2606,7 @@ static int calculate_asus_capacity(int raw_soc, int last_rawSoc, int last_shift)
 	int l_newShift = last_shift;
 	struct timespec mtNow;
 	mtNow = current_kernel_time();
-	/*BSP david: judge charging parameter when soc below charging base, 
+	/*BSP david: judge charging parameter when soc below charging base,
 				judge discharging parameter when soc above discharging base*/
 	if (l_chargingBase == -1 || raw_soc < l_chargingBase) {
 		l_chargingBase = raw_soc;
@@ -3383,7 +3383,7 @@ static void restore_cycle_counter(struct fg_chip *chip)
 		} else{
 			chip->cyc_ctr.count[i] = data[0] | data[1] << 8;
 		}
-		snprintf(ccInfo, sizeof(ccInfo), "%s%d, ", ccInfo, chip->cyc_ctr.count[i]);
+		scnprintf(ccInfo, sizeof(ccInfo), "%s%d, ", ccInfo, chip->cyc_ctr.count[i]);
 	}
 	fg_mem_release(chip);
 	BAT_DBG("%s: %s\n", __func__, ccInfo);
@@ -4568,7 +4568,7 @@ static void status_change_work(struct work_struct *work)
 			BAT_DBG("%s: holding soc at 100\n", __func__);
 			chip->charge_full = true;
 		} else {
-			BAT_DBG("%s: terminated charging at %d/0x%02x\n", __func__, 
+			BAT_DBG("%s: terminated charging at %d/0x%02x\n", __func__,
 					capacity, get_monotonic_soc_raw(chip));
 		}
 	}
@@ -7039,7 +7039,7 @@ wait:
 		fg_cap_learning_load_data(chip);
 		if (profiles_same) {
 			msoc = get_monotonic_soc_raw(chip);
-			BAT_DBG("%s: msoc = %d, v_current_pred = %d, v = %d, threshold = %d\n", __func__, msoc, 
+			BAT_DBG("%s: msoc = %d, v_current_pred = %d, v = %d, threshold = %d\n", __func__, msoc,
 				fg_data[FG_DATA_CPRED_VOLTAGE].value,
 				fg_data[FG_DATA_VOLTAGE].value,
 				settings[FG_MEM_VBAT_EST_DIFF].value * 1000);
@@ -9378,7 +9378,7 @@ static int gaugeIC_status_proc_read(struct seq_file *buf, void *v)
 	int rc;
 	int ret = 0;
 	//By accessing BATT_ID to confirm the gaugeIC is working
-	rc = get_battery_soc_raw(the_chip); 
+	rc = get_battery_soc_raw(the_chip);
 	if (rc == 0) {
 		BAT_DBG_E("%s: read raw SOC error with rc = %d!\n", __FUNCTION__, rc);
 		ret = 0;
@@ -9604,7 +9604,7 @@ void qpnp_smbcharger_polling_data_worker(int time) {
 void update_gauge_status_worker(struct work_struct *dat)
 {
 	int ret = 0;
-	
+
 	if (!the_chip->profile_loaded && !the_chip->use_otp_profile) {
 		BAT_DBG("%s: profile not loaded yet, delay 5s\n", __func__);
 		qpnp_smbcharger_polling_data_worker(5);
@@ -10034,7 +10034,7 @@ void bms_modify_soc_early_suspend(void)
 				g_expect_suspend_soc = bat_cap;
 				g_last_suspend_csoc = cSoc;
 				g_bms_modify_soc_start_time_s = mtNow.tv_sec;
-				BAT_DBG("%s:first determine, soc = %d, csoc = %d, start_time = %d\n", __func__, 
+				BAT_DBG("%s:first determine, soc = %d, csoc = %d, start_time = %d\n", __func__,
 					g_expect_suspend_soc, g_last_suspend_csoc, g_bms_modify_soc_start_time_s);
 			} else{
 				BAT_DBG("%s:not first determine, don't need to change!\n", __func__);
@@ -10123,7 +10123,7 @@ static void force_soc_change(int l_soc)
 
 	buffer[0] = 0x80;
 	buffer[1] = convert_soc_to_msoc(l_soc);
-	
+
 	BAT_DBG("%s: soc = %u, force_soc = %d, buffer[1] = %u, buffer[0] = %u\n", __func__, buffer[2], l_soc, buffer[1], buffer[0]);
 	rc = fg_mem_write(the_chip, buffer, SRAM_MONOTONIC_SOC_REG, 2,
 			SRAM_MONOTONIC_SOC_OFFSET, 0);
@@ -10172,7 +10172,7 @@ static void bms_modify_soc(void)
 			g_expect_suspend_soc = bat_cap;
 			g_last_suspend_csoc = cSoc;
 			g_bms_modify_soc_start_time_s = curr_tme;
-			BAT_DBG("%s:soc changed, reset timer, soc = %d, csoc = %d, start_time = %d\n", __func__, 
+			BAT_DBG("%s:soc changed, reset timer, soc = %d, csoc = %d, start_time = %d\n", __func__,
 				g_expect_suspend_soc, g_last_suspend_csoc, g_bms_modify_soc_start_time_s);
 		}
 	}
@@ -10228,7 +10228,7 @@ static void fg_check_ima_idle(struct fg_chip *chip)
 static void fg_shutdown(struct spmi_device *spmi)
 {
 	struct fg_chip *chip = dev_get_drvdata(&spmi->dev);
-	
+
 	if (chip->charge_full) {
 		charge_full_func();
 	}
