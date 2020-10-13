@@ -2667,7 +2667,7 @@ static irqreturn_t tsens_irq_thread(int irq, void *data)
 					low_th_state = THERMAL_TRIP_ACTIVATION_DISABLED;
 		}
 		if (upper_thr || lower_thr) {
-			unsigned long temp;
+			unsigned long temp = 0;
 			enum thermal_trip_type trip =
 					THERMAL_TRIP_CONFIGURABLE_LOW;
 
