@@ -13,22 +13,22 @@
  * This software module (hereinafter called "Software") and any
  * information on application-sheets (hereinafter called "Information") is
  * provided free of charge for the sole purpose to support your application
- * work. 
+ * work.
  *
  * As such, the Software is merely an experimental software, not tested for
- * safety in the field and only intended for inspiration for further development 
+ * safety in the field and only intended for inspiration for further development
  * and testing. Any usage in a safety-relevant field of use (like automotive,
  * seafaring, spacefaring, industrial plants etc.) was not intended, so there are
  * no precautions for such usage incorporated in the Software.
- * 
+ *
  * The Software is specifically designed for the exclusive use for Bosch
  * Sensortec products by personnel who have special experience and training. Do
  * not use this Software if you do not have the proper experience or training.
- * 
+ *
  * This Software package is provided as is and without any expressed or
  * implied warranties, including without limitation, the implied warranties of
  * merchantability and fitness for a particular purpose.
- * 
+ *
  * Bosch Sensortec and their representatives and agents deny any liability for
  * the functional impairment of this Software in terms of fitness, performance
  * and safety. Bosch Sensortec and their representatives and agents shall not be
@@ -38,10 +38,10 @@
  * Sensortec assumes no responsibility for the consequences of use of such
  * Information nor for any infringement of patents or other rights of third
  * parties which may result from its use.
- * 
+ *
  *------------------------------------------------------------------------------
- * The following Product Disclaimer does not apply to the BSX4-HAL-4.1NoFusion Software 
- * which is licensed under the Apache License, Version 2.0 as stated above.  
+ * The following Product Disclaimer does not apply to the BSX4-HAL-4.1NoFusion Software
+ * which is licensed under the Apache License, Version 2.0 as stated above.
  * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Product Disclaimer
@@ -50,11 +50,11 @@
  *
  * Assessment of Products Returned from Field
  *
- * Returned products are considered good if they fulfill the specifications / 
+ * Returned products are considered good if they fulfill the specifications /
  * test data for 0-mileage and field listed in this document.
  *
  * Engineering Samples
- * 
+ *
  * Engineering samples are marked with (e) or (E). Samples may vary from the
  * valid technical specifications of the series product contained in this
  * data sheet. Therefore, they are not intended or fit for resale to
@@ -78,16 +78,16 @@
  * of the product in the overall system/vehicle.
  *
  * Bosch does not assume any responsibility for changes to the environment
- * of the product that deviate from the TCD and the agreed upon documents 
+ * of the product that deviate from the TCD and the agreed upon documents
  * as well as all applications not released by Bosch
   *
- * The resale and/or use of products are at the purchaser’s own risk and 
- * responsibility. The examination and testing of the SMI130 
+ * The resale and/or use of products are at the purchaser’s own risk and
+ * responsibility. The examination and testing of the SMI130
  * is the sole responsibility of the purchaser.
  *
- * The purchaser shall indemnify Bosch from all third party claims 
- * arising from any product use not covered by the parameters of 
- * this product data sheet or not approved by Bosch and reimburse Bosch 
+ * The purchaser shall indemnify Bosch from all third party claims
+ * arising from any product use not covered by the parameters of
+ * this product data sheet or not approved by Bosch and reimburse Bosch
  * for all costs and damages in connection with such claims.
  *
  * The purchaser must monitor the market for the purchased products,
@@ -102,7 +102,7 @@
  * including without limitation warranties of
  * non-infringement of intellectual property rights or copyrights
  * of any third party.
- * The information given in this document shall in no event be regarded 
+ * The information given in this document shall in no event be regarded
  * as a guarantee of conditions or characteristics. They are provided
  * for illustrative purposes only and no evaluation regarding infringement
  * of intellectual property rights or copyrights or regarding functionality,
@@ -16954,6 +16954,8 @@ struct smi130_mag_xyz_s32_t *bosch_akm_xyz)
 	/* variable used for return the status of communication result*/
 	SMI130_RETURN_FUNCTION_TYPE com_rslt = E_SMI130_COMM_RES;
 	struct smi130_mag_t mag_xyz;
+
+	memset(&mag_xyz, 0, sizeof(mag_xyz));
 
 	com_rslt = smi130_read_mag_xyz(&mag_xyz, BST_AKM);
 	/* Compensation for X axis */
