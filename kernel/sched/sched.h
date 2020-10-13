@@ -1936,9 +1936,9 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	struct nr_stats_s *nr_stats = &per_cpu(runqueue_stats, rq->cpu);
 #endif
-    
+
 	unsigned prev_nr = rq->nr_running;
-        
+
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	write_seqcount_begin(&nr_stats->ave_seqcnt);
 	nr_stats->ave_nr_running = do_avg_nr_running(rq);
@@ -1951,7 +1951,7 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	write_seqcount_end(&nr_stats->ave_seqcnt);
 #endif
-        
+
 	if (prev_nr < 2 && rq->nr_running >= 2) {
 #ifdef CONFIG_SMP
 		if (!rq->rd->overload)
@@ -1979,17 +1979,17 @@ static inline void sub_nr_running(struct rq *rq, unsigned count)
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	struct nr_stats_s *nr_stats = &per_cpu(runqueue_stats, rq->cpu);
 #endif
-        
+
 	sched_update_nr_prod(cpu_of(rq), count, false);
-        
+
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	write_seqcount_begin(&nr_stats->ave_seqcnt);
 	nr_stats->ave_nr_running = do_avg_nr_running(rq);
 	nr_stats->nr_last_stamp = rq->clock_task;
 #endif
-        
+
 	rq->nr_running -= count;
-        
+
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_LAZYPLUG)
 	write_seqcount_end(&nr_stats->ave_seqcnt);
 #endif
@@ -2311,6 +2311,19 @@ static inline u64 irq_time_read(int cpu)
 }
 #endif /* CONFIG_64BIT */
 #endif /* CONFIG_IRQ_TIME_ACCOUNTING */
+
+static inline void account_reset_rq(struct rq *rq)
+{
+#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+	rq->prev_irq_time = 0;
+#endif
+#ifdef CONFIG_PARAVIRT
+	rq->prev_steal_time = 0;
+#endif
+#ifdef CONFIG_PARAVIRT_TIME_ACCOUNTING
+	rq->prev_steal_time_rq = 0;
+#endif
+}
 
 /*
  * task_may_not_preempt - check whether a task may not be preemptible soon
