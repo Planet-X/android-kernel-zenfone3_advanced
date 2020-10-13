@@ -9573,7 +9573,7 @@ int print_battery_status(void) {
 		bat_cap,
 		bat_vol/1000,
 		bat_cur/1000);
-	snprintf(battInfo, sizeof(battInfo), "%sTemp:%d.%dC, Cable:%s, BATID:%lld, CHG_Status:%d(%s), CHG_Mode:%s, CHG_Cur:%d(%s), RAW:%d\n",
+	scnprintf(battInfo, sizeof(battInfo), "%sTemp:%d.%dC, Cable:%s, BATID:%lld, CHG_Status:%d(%s), CHG_Mode:%s, CHG_Cur:%d(%s), RAW:%d\n",
 		battInfo,
 		bat_temp/10,
 		bat_temp%10,
