@@ -43,7 +43,7 @@
 
 #define ASUS_RGB_SENSOR_DATA_SIZE	5
 #define ASUS_RGB_SENSOR_NAME_SIZE	32
-#define ASUS_RGB_SENSOR_IOC_MAGIC                      ('C')	///< RGB sensor ioctl magic number 
+#define ASUS_RGB_SENSOR_IOC_MAGIC                      ('C')	///< RGB sensor ioctl magic number
 #define ASUS_RGB_SENSOR_IOCTL_DATA_READ           _IOR(ASUS_RGB_SENSOR_IOC_MAGIC, 1, int[ASUS_RGB_SENSOR_DATA_SIZE])	///< RGB sensor ioctl command - Read data RGBW
 #define ASUS_RGB_SENSOR_IOCTL_IT_SET           _IOW(ASUS_RGB_SENSOR_IOC_MAGIC, 2, int)	///< RGB sensor ioctl command - Set integration time
 #define ASUS_RGB_SENSOR_IOCTL_DEBUG_MODE           _IOW(ASUS_RGB_SENSOR_IOC_MAGIC, 3, int)	///< RGB sensor ioctl command - Get debug mode
@@ -156,7 +156,7 @@ static int I2C_RxData(uint16_t slaveAddr, uint8_t cmd, uint8_t *rxData, int leng
 		return -EIO;
 	}
 
-	return 0; 
+	return 0;
 }
 
 static int I2C_TxData(uint16_t slaveAddr, uint8_t *txData, int length)
@@ -282,8 +282,8 @@ int rgbSensor_getUserSpaceData(char* buf, int len)
 	struct file *fp = NULL;
 	mm_segment_t old_fs;
 	loff_t pos_lsts = 0;
-	int readlen = 0;	
-	
+	int readlen = 0;
+
 	fp = filp_open(RGB_SENSOR_FILE, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (IS_ERR_OR_NULL(fp)) {
 		RGB_DBG_E("%s: open %s fail\n", __func__, RGB_SENSOR_FILE);
@@ -297,7 +297,7 @@ int rgbSensor_getUserSpaceData(char* buf, int len)
 	if (fp->f_op != NULL && fp->f_op->read != NULL) {
 		pos_lsts = 0;
 		readlen = fp->f_op->read(fp, buf, len, &pos_lsts);
-		buf[readlen] = '\0';		
+		buf[readlen] = '\0';
 	} else {
 		RGB_DBG_E("%s: f_op=NULL or op->read=NULL\n", __func__);
 		return -ENXIO;	/*No such device or address*/
@@ -494,7 +494,7 @@ static int rgbSensor_setup(struct cm3323e_info *lpi)
 	if (ret < 0) {
 		return -EIO;
 	}
-	
+
 	// Get initial GREEN light data
 	ret = get_rgb_data(RGB_DATA_G, &adc_data, false);
 	if (ret < 0) {
@@ -529,10 +529,10 @@ void rgbRegDump(char tempString[], int length)
 	if (cm_lp_info != NULL && cm_lp_info->als_enable == 1) {
 		for (i = 0; i < ARRAY_SIZE(rgbReg_CMD_Table); i++) {
 			if (i > 0) {
-				snprintf(tempString, length, "%s\n", tempString);
+				scnprintf(tempString, length, "%s\n", tempString);
 			}
 			_cm3323e_I2C_Read_Word(CM3323E_ADDR, rgbReg_CMD_Table[i], &reg_value);
-			snprintf(tempString, length, "%s0x%02x=%u", tempString, rgbReg_CMD_Table[i], reg_value);
+			scnprintf(tempString, length, "%s0x%02x=%u", tempString, rgbReg_CMD_Table[i], reg_value);
 		}
 	}
 }
@@ -1387,7 +1387,7 @@ static int cm3323e_probe(struct i2c_client *client,
 #endif
 
 	RGB_DBG("%s: Probe success!\n", __func__);
-	
+
 	return ret;
 
 err_rgbSensor_miscRegister:
